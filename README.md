@@ -17,8 +17,6 @@ Run `/geo-audit https://example.com` and the system:
 5. Writes `GEO-AUDIT-REPORT.md` with prioritized issues and a 30-day action plan
 6. Generates `GEO-AUDIT-REPORT.pdf` — selectable text, no broken page splits on tables
 
-**Example output: [50/100 audit of Studio Enthusiasm](https://studio-enthusiasm.com)**
-
 ---
 
 ## Scoring Model
