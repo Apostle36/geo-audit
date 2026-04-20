@@ -15,7 +15,7 @@ Run `/geo-audit https://example.com` and the system:
 3. Verifies every finding with `curl` before writing it (no hallucinated schema findings)
 4. Scores across 5 weighted categories
 5. Writes `GEO-AUDIT-REPORT.md` with prioritized issues and a 30-day action plan
-6. Generates `GEO-AUDIT-REPORT.pdf` — selectable text, no broken page splits on tables
+6. Generates `GEO-AUDIT-REPORT.pdf`
 
 ---
 
