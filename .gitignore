@@ -1,0 +1,24 @@
+# Environment / secrets
+.env
+*.env
+.env.*
+
+# Audit output files (generated per run — don't commit)
+GEO-AUDIT-REPORT.md
+GEO-AUDIT-REPORT.pdf
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+
+# Node
+node_modules/
+
+# macOS
+.DS_Store
+
+# Claude Code local settings
+.claude/settings.local.json
