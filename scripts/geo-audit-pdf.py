@@ -98,6 +98,7 @@ def md_to_html(text: str) -> str:  # noqa: C901
     in_code = False
     in_ul = False
     in_ol = False
+    in_issue_block = False
     table_header_done = False
 
     def close_lists() -> str:
@@ -110,6 +111,13 @@ def md_to_html(text: str) -> str:  # noqa: C901
             result += "</ol>"
             in_ol = False
         return result
+
+    def close_issue_block() -> str:
+        nonlocal in_issue_block
+        if in_issue_block:
+            in_issue_block = False
+            return "</div>"
+        return ""
 
     i = 0
     while i < len(lines):
@@ -165,6 +173,9 @@ def md_to_html(text: str) -> str:  # noqa: C901
 
         if line.startswith("### "):
             out.append(close_lists())
+            out.append(close_issue_block())
+            out.append('<div class="issue-block">')
+            in_issue_block = True
             out.append(f"<h3>{inline_md(line[4:])}</h3>")
         elif line.startswith("#### "):
             out.append(close_lists())
@@ -211,6 +222,7 @@ def md_to_html(text: str) -> str:  # noqa: C901
         i += 1
 
     out.append(close_lists())
+    out.append(close_issue_block())
     if in_table:
         out.append("</tbody></table>")
     if in_code:
@@ -279,6 +291,7 @@ def generate_html(data: dict) -> str:
     score = data["overall_score"]
     color = score_color(score)
     url_display = data["url"].replace("https://", "").replace("http://", "").rstrip("/")
+    domain_link = f'<a href="https://{DOMAIN}" style="color:inherit;text-decoration:none;">{DOMAIN}</a>' if DOMAIN else ""
 
     sections_html = "".join(
         f'<section class="report-section">'
@@ -670,6 +683,12 @@ def generate_html(data: dict) -> str:
 
   tr:last-child td {{ border-bottom: none; }}
 
+  /* ── Issue blocks ─────────────────────── */
+  .issue-block {{
+    break-inside: avoid;
+    margin-bottom: 4px;
+  }}
+
   /* ── Print / PDF page breaks ─────────── */
   @media print {{
     @page {{ margin: 0; }}
@@ -683,7 +702,10 @@ def generate_html(data: dict) -> str:
     pre {{ break-inside: avoid; }}
     blockquote {{ break-inside: avoid; }}
     ul, ol {{ break-inside: avoid; }}
+    li {{ break-inside: avoid; }}
+    p {{ break-inside: avoid; orphans: 4; widows: 4; }}
     .report-section {{ break-inside: auto; }}
+    h3 + p, h4 + p {{ break-before: avoid; }}
   }}
 
   /* ── Footer ───────────────────────────── */
@@ -714,7 +736,7 @@ def generate_html(data: dict) -> str:
 <!-- Cover -->
 <div class="cover">
   <div class="cover-top">
-    <span class="brand-name">{DOMAIN}</span>
+    <span class="brand-name">{domain_link}</span>
     <span class="cover-date">{data['date']}</span>
   </div>
 
@@ -732,7 +754,7 @@ def generate_html(data: dict) -> str:
 
   <div class="cover-footer">
     <div class="cover-byline">
-      Prepared by <strong>{AUTHOR}</strong>{f" &middot; {DOMAIN}" if DOMAIN else ""}
+      Prepared by <strong>{AUTHOR}</strong>{f" &middot; {domain_link}" if DOMAIN else ""}
     </div>
   </div>
 </div>
@@ -755,9 +777,9 @@ def generate_html(data: dict) -> str:
 
 <!-- Footer -->
 <div class="page-footer">
-  <span class="footer-brand">{DOMAIN}</span>
+  <span class="footer-brand">{domain_link}</span>
   <span class="footer-note">
-    {AUTHOR}{" &middot; " if DOMAIN else ""}{DOMAIN} &middot; GEO Audit Report
+    {AUTHOR}{" &middot; " if DOMAIN else ""}{domain_link} &middot; GEO Audit Report
   </span>
 </div>
 

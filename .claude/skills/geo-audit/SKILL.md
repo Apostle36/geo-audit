@@ -268,7 +268,7 @@ Calculate from the platform presence map using this rubric:
 | Signal | Points |
 |---|---|
 | Active LinkedIn profile with content | 10 |
-| Listed in ≥1 industry directory (Clutch, TechBehemoths, G2, etc.) | 15 |
+| Listed in ≥1 relevant industry directory or database | 15 |
 | ≥1 third-party publication mention or byline | 20 |
 | YouTube channel with ≥3 videos | 10 |
 | Active Reddit presence or mentions | 10 |
@@ -277,6 +277,15 @@ Calculate from the platform presence map using this rubric:
 | Podcast appearance or press coverage | 10 |
 
 Max: 100. Score what is verified present. Do not add points for signals that were not confirmed.
+
+**Directory signal — business-type mapping (use the relevant one, never default to Clutch/G2 for non-SaaS/non-agency companies):**
+- SaaS / software: G2, Capterra, Gartner Peer Insights, TrustRadius
+- Agencies / consultancies: Clutch, TechBehemoths, DesignRush
+- Logistics / freight: FreightWaves directory, Transport Intelligence, Crunchbase (industry-specific)
+- Manufacturing / industrial: Thomas Net, Europages, industry trade association databases
+- Financial services: Bloomberg company profile, Crunchbase, sector-specific regulatory registers
+- Healthcare / medtech: relevant clinical or regulatory databases, industry association directories
+- Any B2B: Crunchbase and PitchBook count as authority signals when no vertical directory applies
 
 #### Score Interpretation
 
@@ -359,8 +368,6 @@ Generate a file called `GEO-AUDIT-REPORT.md` with the following structure:
 | Schema & Structured Data | [X]/100 | [+X / -X / —] | High | 10% | [X] |
 | **Overall GEO Score** | | | | | **[X]/100** |
 
-_Previous audit: [date] — [X]/100. If no previous audit, show — in Δ column._
-
 ---
 
 ## Critical Issues (Fix Immediately)
@@ -426,13 +433,6 @@ _Previous audit: [date] — [X]/100. If no previous audit, show — in Δ column
 - [ ] Action item 1
 - [ ] Action item 2
 
----
-
-## Appendix: Pages Analyzed
-
-| URL | Title | GEO Issues |
-|---|---|---|
-| [url] | [title] | [issue count] |
 ```
 
 ---
