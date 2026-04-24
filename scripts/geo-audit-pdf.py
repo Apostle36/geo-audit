@@ -769,10 +769,21 @@ def generate_html(data: dict) -> str:
 # PDF rendering
 # ---------------------------------------------------------------------------
 
+SYSTEM_CHROME = "/usr/bin/google-chrome"
+
+
 def render_to_pdf(html_path: Path) -> bytes:
     """Render the HTML to a text-based A4 PDF using Playwright's native export."""
+    import shutil
+    exe = os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or (
+        SYSTEM_CHROME if shutil.which(SYSTEM_CHROME) else None
+    )
+    launch_kwargs = {"args": ["--no-sandbox", "--disable-dev-shm-usage"]}
+    if exe:
+        launch_kwargs["executable_path"] = exe
+
     with sync_playwright() as p:
-        browser = p.chromium.launch()
+        browser = p.chromium.launch(**launch_kwargs)
         page = browser.new_page()
         page.set_viewport_size({"width": A4_W, "height": A4_H})
         page.goto(f"file://{html_path}")
