@@ -11,7 +11,7 @@ GEO is the practice of optimizing web content so AI systems (ChatGPT, Perplexity
 Run `/geo-audit https://example.com` and the system:
 
 1. Crawls the site (sitemap, key pages, raw HTML via curl)
-2. Spawns 4 specialized subagents in parallel — citability, authority, E-E-A-T, technical
+2. Spawns six specialized agents in parallel — citability, authority, E-E-A-T, technical, schema, platform readiness
 3. Verifies every finding with `curl` before writing it (no hallucinated schema findings)
 4. Scores across 5 weighted categories
 5. Writes `GEO-AUDIT-REPORT.md` with prioritized issues and a 30-day action plan
@@ -31,13 +31,40 @@ Run `/geo-audit https://example.com` and the system:
 
 ---
 
-## Installation
+## Quick Start
 
-### Prerequisites
+```bash
+git clone https://github.com/Apostle36/geo-audit.git
+cd geo-audit
 
-- [Claude Code](https://claude.ai/code) CLI installed
+# Install the skill and agents
+mkdir -p ~/.claude/skills/geo-audit ~/.claude/agents
+cp .claude/skills/geo-audit/SKILL.md ~/.claude/skills/geo-audit/SKILL.md
+cp .claude/agents/*.md ~/.claude/agents/
+
+# Install PDF dependencies
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r scripts/requirements.txt
+playwright install chromium
+
+# Open Claude Code from the repo root, then run:
+claude
+# /geo-audit https://example.com
+```
+
+---
+
+## Requirements
+
+- [Claude Code](https://claude.ai/code) with an active Claude subscription
 - Python 3.9+
-- Playwright (for PDF generation)
+- Git
+
+No Anthropic API key required. The tool runs entirely inside Claude Code using your subscription.
+
+---
+
+## Installation
 
 ### 1. Clone the repo
 
@@ -48,30 +75,30 @@ cd geo-audit
 
 ### 2. Install the skill and agents into Claude Code
 
-Copy the skill and agents to your Claude Code global config directory:
-
 ```bash
-# Create directories if they don't exist
-mkdir -p ~/.claude/skills/geo-audit
-mkdir -p ~/.claude/agents
-
-# Copy the skill
+mkdir -p ~/.claude/skills/geo-audit ~/.claude/agents
 cp .claude/skills/geo-audit/SKILL.md ~/.claude/skills/geo-audit/SKILL.md
-
-# Copy the agents
 cp .claude/agents/*.md ~/.claude/agents/
 ```
 
 ### 3. Install PDF generation dependencies
 
 ```bash
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r scripts/requirements.txt
 playwright install chromium
 ```
 
-### 4. Copy the PDF script somewhere on your PATH (optional)
+### 4. Verify installation
 
-The audit skill expects `scripts/geo-audit-pdf.py` to exist relative to the working directory where you run the audit. Copy it to your project or run audits from this repo's root.
+Restart Claude Code after copying the files. Then confirm the skill is available:
+
+```bash
+ls ~/.claude/skills/geo-audit/SKILL.md
+ls ~/.claude/agents/
+```
+
+Run a test audit — the `/geo-audit` command should be recognised immediately.
 
 ---
 
@@ -114,8 +141,7 @@ GEO Audit Report: [Site Name]
 │   ├── Technical GEO    — curl-verified binary facts
 │   └── Schema & Structured Data — JSON-LD templates included
 ├── Quick Wins (implement this week)
-├── 30-Day Action Plan
-└── Appendix: Pages Analyzed
+└── 30-Day Action Plan
 ```
 
 ---
@@ -160,6 +186,34 @@ Dependencies: `playwright`, `markdown`. Run `playwright install chromium` once a
 
 ---
 
+## Troubleshooting
+
+**`/geo-audit` is not recognised**
+Restart Claude Code after copying the skill files. Then check:
+```bash
+ls ~/.claude/skills/geo-audit/SKILL.md
+ls ~/.claude/agents/
+```
+
+**PDF generation fails**
+Make sure you activated the virtual environment and installed Chromium:
+```bash
+source .venv/bin/activate
+pip install -r scripts/requirements.txt
+playwright install chromium
+```
+
+**PDF script not found**
+Run the audit from the repository root, or ensure `scripts/geo-audit-pdf.py` exists in the directory where you run the audit.
+
+---
+
+## Notes on Generated Reports
+
+`GEO-AUDIT-REPORT.md` and `GEO-AUDIT-REPORT.pdf` are excluded from Git by default (see `.gitignore`). These files may contain business, technical, and competitive information about the audited site. Do not commit them unless you intend to publish them.
+
+---
+
 ## License
 
 MIT — use freely, attribution appreciated.
@@ -169,5 +223,7 @@ MIT — use freely, attribution appreciated.
 ## Credits
 
 Built by [Apostolos Bolkas](https://bolkas.com) — B2B marketing consultant and automation specialist.
+
+Inspired by the original GEO audit work by [Zubair Trabzada](https://github.com/zubair-trabzada/geo-seo-claude). This version focuses on improving evidence verification, report reliability, and PDF generation.
 
 Research basis: ["GEO: Generative Engine Optimization"](https://arxiv.org/abs/2311.09735) — Aggarwal et al., 2024 (Georgia Tech / Princeton / IIT Delhi).

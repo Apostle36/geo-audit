@@ -125,7 +125,7 @@ For each page in the crawl set, **fetch that page individually** and record:
 
 ### Phase 2: Parallel Subagent Delegation
 
-Delegate analysis to 4 specialized subagents. Each subagent produces structured findings. **Subagents do not produce final scores** — scores are calculated in Phase 3 from verified inputs only.
+Delegate analysis to five specialized subagents. Each subagent produces structured findings. **Subagents do not produce final scores** — scores are calculated in Phase 3 from verified inputs only.
 
 **Subagent 1: AI Citability Analysis (geo-ai-visibility)**
 - Analyze content blocks for quotability by AI systems
