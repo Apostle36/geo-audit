@@ -27,6 +27,9 @@ import os
 import sys
 import re
 from pathlib import Path
+import html as html_lib
+import tempfile
+import markdown
 
 # Branding — override with env vars
 AUTHOR = os.environ.get("GEO_AUDIT_AUTHOR", "GEO Audit")
@@ -52,7 +55,7 @@ A4_H = 1123
 def score_color(score: int) -> str:
     if score >= 75:
         return "#16A34A"
-    if score >= 55:
+    if score >= 60:
         return "#D97706"
     if score >= 40:
         return "#EA580C"
@@ -79,156 +82,54 @@ def escape_html(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+def md_to_html(text: str) -> str:
+    """Render Markdown as text; raw HTML is escaped and links are validated."""
+    from html.parser import HTMLParser
+    from urllib.parse import urlsplit
+
+    class SafeHTML(HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=False)
+            self.parts = []
+
+        def handle_starttag(self, tag, attrs):
+            safe = []
+            for key, value in attrs:
+                if key.startswith("on") or key == "style":
+                    continue
+                if key in ("href", "src"):
+                    if urlsplit(value or "").scheme.lower() not in ("", "http", "https", "mailto"):
+                        continue
+                    if key == "src":
+                        continue  # Reports do not fetch external images.
+                safe.append(f' {key}="{html_lib.escape(value or "", quote=True)}"')
+            if tag == "img":
+                return
+            self.parts.append("<" + tag + "".join(safe) + ">")
+
+        def handle_endtag(self, tag):
+            if tag != "img":
+                self.parts.append(f"</{tag}>")
+
+        def handle_data(self, data):
+            self.parts.append(data)
+
+        def handle_entityref(self, name):
+            self.parts.append(f"&{name};")
+
+        def handle_charref(self, name):
+            self.parts.append(f"&#{name};")
+
+    rendered = markdown.markdown(html_lib.escape(text, quote=False),
+                                 extensions=["tables", "fenced_code"])
+    parser = SafeHTML()
+    parser.feed(rendered)
+    return "".join(parser.parts)
+
+
 def inline_md(text: str) -> str:
-    """Convert inline markdown to HTML — bold, italic, code, links."""
-    text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    text = re.sub(r"\*\*\*(.+?)\*\*\*", r"<strong><em>\1</em></strong>", text)
-    text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
-    text = re.sub(r"\*(.+?)\*", r"<em>\1</em>", text)
-    text = re.sub(r"`([^`]+)`", r"<code>\1</code>", text)
-    text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r'<a href="\2">\1</a>', text)
-    return text
-
-
-def md_to_html(text: str) -> str:  # noqa: C901
-    """Convert a markdown block to HTML, handling tables, lists, headings."""
-    lines = text.split("\n")
-    out: list[str] = []
-    in_table = False
-    in_code = False
-    in_ul = False
-    in_ol = False
-    in_issue_block = False
-    table_header_done = False
-
-    def close_lists() -> str:
-        nonlocal in_ul, in_ol
-        result = ""
-        if in_ul:
-            result += "</ul>"
-            in_ul = False
-        if in_ol:
-            result += "</ol>"
-            in_ol = False
-        return result
-
-    def close_issue_block() -> str:
-        nonlocal in_issue_block
-        if in_issue_block:
-            in_issue_block = False
-            return "</div>"
-        return ""
-
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-
-        # Code fence
-        if line.strip().startswith("```"):
-            if in_code:
-                out.append("</code></pre>")
-                in_code = False
-            else:
-                out.append(close_lists())
-                lang = line.strip()[3:]
-                out.append(f'<pre><code class="lang-{lang}">')
-                in_code = True
-            i += 1
-            continue
-
-        if in_code:
-            out.append(escape_html(line))
-            i += 1
-            continue
-
-        # Tables
-        if "|" in line and line.strip().startswith("|"):
-            if not in_table:
-                out.append(close_lists())
-                out.append("<table>")
-                in_table = True
-                table_header_done = False
-
-            cells = [c.strip() for c in line.strip().strip("|").split("|")]
-
-            if all(re.match(r"^[-:]+$", c) for c in cells if c):
-                out.append("<tbody>")
-                table_header_done = True
-                i += 1
-                continue
-
-            if not table_header_done:
-                row = "<thead><tr>" + "".join(f"<th>{inline_md(c)}</th>" for c in cells) + "</tr></thead>"
-            else:
-                row = "<tr>" + "".join(f"<td>{inline_md(c)}</td>" for c in cells) + "</tr>"
-            out.append(row)
-            i += 1
-            continue
-        elif in_table:
-            out.append("</tbody></table>")
-            in_table = False
-            table_header_done = False
-
-        stripped = line.strip()
-
-        if line.startswith("### "):
-            out.append(close_lists())
-            out.append(close_issue_block())
-            out.append('<div class="issue-block">')
-            in_issue_block = True
-            out.append(f"<h3>{inline_md(line[4:])}</h3>")
-        elif line.startswith("#### "):
-            out.append(close_lists())
-            out.append(f"<h4>{inline_md(line[5:])}</h4>")
-        elif stripped.startswith("- [x] ") or stripped.startswith("- [X] "):
-            if not in_ul:
-                out.append('<ul class="checklist">')
-                in_ul = True
-            out.append(f'<li class="done">{inline_md(stripped[6:])}</li>')
-        elif stripped.startswith("- [ ] "):
-            if not in_ul:
-                out.append('<ul class="checklist">')
-                in_ul = True
-            out.append(f'<li class="todo">{inline_md(stripped[6:])}</li>')
-        elif stripped.startswith("- ") or stripped.startswith("* "):
-            if in_ol:
-                out.append("</ol>")
-                in_ol = False
-            if not in_ul:
-                out.append("<ul>")
-                in_ul = True
-            out.append(f"<li>{inline_md(stripped[2:])}</li>")
-        elif re.match(r"^\d+\. ", stripped):
-            if in_ul:
-                out.append("</ul>")
-                in_ul = False
-            if not in_ol:
-                out.append("<ol>")
-                in_ol = True
-            content = re.sub(r"^\d+\. ", "", stripped)
-            out.append(f"<li>{inline_md(content)}</li>")
-        elif stripped in ("---", "***", "___"):
-            out.append(close_lists())
-            out.append("<hr>")
-        elif stripped.startswith("> "):
-            out.append(close_lists())
-            out.append(f"<blockquote>{inline_md(stripped[2:])}</blockquote>")
-        elif not stripped:
-            out.append(close_lists())
-        elif stripped:
-            out.append(close_lists())
-            out.append(f"<p>{inline_md(stripped)}</p>")
-
-        i += 1
-
-    out.append(close_lists())
-    out.append(close_issue_block())
-    if in_table:
-        out.append("</tbody></table>")
-    if in_code:
-        out.append("</code></pre>")
-
-    return "\n".join(out)
+    result = md_to_html(text)
+    return result[3:-4] if result.startswith("<p>") and result.endswith("</p>") else result
 
 
 def parse_report(text: str) -> dict:
@@ -238,7 +139,7 @@ def parse_report(text: str) -> dict:
         "date": "",
         "business_type": "",
         "pages_analyzed": "",
-        "overall_score": 0,
+        "overall_score": None,
         "score_label": "—",
         "sections": [],
         "executive_summary": "",
@@ -257,16 +158,40 @@ def parse_report(text: str) -> dict:
         elif line.startswith("**Pages Analyzed:**"):
             data["pages_analyzed"] = line.split("**Pages Analyzed:**")[1].strip()
 
-    m = re.search(r"\*\*Overall GEO Score:\s*(\d+)/100", text)
+    # Ignore fenced examples when extracting the report score and sections.
+    lines = []
+    fence = None
+    for line in text.splitlines():
+        match = re.match(r"^\s*(`{3,}|~{3,})", line)
+        if match:
+            token = match.group(1)
+            if fence is None:
+                fence = token
+            elif token[0] == fence[0] and len(token) >= len(fence):
+                fence = None
+            lines.append(line)
+        elif fence and line.startswith("## "):
+            lines.append("\x00" + line)
+        else:
+            lines.append(line)
+    protected = "\n".join(lines)
+    score_text = re.sub(r"(?ms)^[ \t]*(`{3,}|~{3,}).*?^\s*\1[^\n]*$", "", protected)
+    m = re.search(r"\*\*Overall GEO Score:\s*(\d+(?:\.\d+)?)/100", score_text)
     if m:
-        s = int(m.group(1))
-        data["overall_score"] = s
+        s = float(m.group(1))
+        if not 0 <= s <= 100:
+            raise ValueError("Overall score must be between 0 and 100")
+        data["overall_score"] = int(s) if s.is_integer() else s
         data["score_label"] = score_label(s)
+    elif not re.search(r"Overall GEO Score:\s*Not assessed", score_text, re.I):
+        raise ValueError("Missing or invalid overall score")
+    else:
+        data["score_label"] = "Not assessed"
 
-    # Split into ## sections
-    parts = re.split(r"^(## .+)$", text, flags=re.MULTILINE)
+    parts = re.split(r"^(## .+)$", protected, flags=re.MULTILINE)
+    parts = [part.replace("\x00", "") for part in parts]
 
-    data["executive_summary"] = parts[0] if parts else ""
+    data["executive_summary"] = ""  # Header metadata is already displayed on the cover.
 
     current: dict | None = None
     for part in parts[1:]:
@@ -289,9 +214,15 @@ def parse_report(text: str) -> dict:
 
 def generate_html(data: dict) -> str:
     score = data["overall_score"]
-    color = score_color(score)
+    color = score_color(score) if score is not None else "#71717A"
+    score = score if score is not None else "—"
+    data = {k: html_lib.escape(v, quote=True) if isinstance(v, str) and k != "executive_summary" else v for k, v in data.items()}
+    author_safe = html_lib.escape(AUTHOR, quote=True)
+    domain_safe = html_lib.escape(DOMAIN, quote=True)
     url_display = data["url"].replace("https://", "").replace("http://", "").rstrip("/")
-    domain_link = f'<a href="https://{DOMAIN}" style="color:inherit;text-decoration:none;">{DOMAIN}</a>' if DOMAIN else ""
+    if DOMAIN and not re.fullmatch(r"[A-Za-z0-9.-]+(?::[0-9]+)?", DOMAIN):
+        raise ValueError("GEO_AUDIT_DOMAIN must be a hostname")
+    domain_link = f'<a href="https://{domain_safe}" style="color:inherit;text-decoration:none;">{domain_safe}</a>' if DOMAIN else ""
 
     sections_html = "".join(
         f'<section class="report-section">'
@@ -754,7 +685,7 @@ def generate_html(data: dict) -> str:
 
   <div class="cover-footer">
     <div class="cover-byline">
-      Prepared by <strong>{AUTHOR}</strong>{f" &middot; {domain_link}" if DOMAIN else ""}
+      Prepared by <strong>{author_safe}</strong>{f" &middot; {domain_link}" if DOMAIN else ""}
     </div>
   </div>
 </div>
@@ -762,7 +693,7 @@ def generate_html(data: dict) -> str:
 <!-- Running header -->
 <div class="page-header">
   <span class="header-audit">GEO Audit &middot; {url_display}</span>
-  <span class="header-brand">{DOMAIN}</span>
+  <span class="header-brand">{domain_safe}</span>
 </div>
 
 <!-- Executive Summary -->
@@ -779,7 +710,7 @@ def generate_html(data: dict) -> str:
 <div class="page-footer">
   <span class="footer-brand">{domain_link}</span>
   <span class="footer-note">
-    {AUTHOR}{" &middot; " if DOMAIN else ""}{domain_link} &middot; GEO Audit Report
+    {author_safe}{" &middot; " if DOMAIN else ""}{domain_link} &middot; GEO Audit Report
   </span>
 </div>
 
@@ -800,7 +731,7 @@ def render_to_pdf(html_path: Path) -> bytes:
     exe = os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or (
         SYSTEM_CHROME if shutil.which(SYSTEM_CHROME) else None
     )
-    launch_kwargs = {"args": ["--no-sandbox", "--disable-dev-shm-usage"]}
+    launch_kwargs = {"args": ["--disable-dev-shm-usage"]}
     if exe:
         launch_kwargs["executable_path"] = exe
 
@@ -808,7 +739,9 @@ def render_to_pdf(html_path: Path) -> bytes:
         browser = p.chromium.launch(**launch_kwargs)
         page = browser.new_page()
         page.set_viewport_size({"width": A4_W, "height": A4_H})
-        page.goto(f"file://{html_path}")
+        page.route("http://**/*", lambda route: route.abort())
+        page.route("https://**/*", lambda route: route.abort())
+        page.goto(html_path.as_uri())
         page.wait_for_load_state("networkidle")
         pdf_bytes = page.pdf(
             format="A4",
@@ -849,12 +782,11 @@ def main() -> None:
     print("Generating HTML...")
     html = generate_html(data)
 
-    tmp = report_path.parent / "_geo_audit_render.html"
-    tmp.write_text(html, encoding="utf-8")
-
-    print("Rendering...")
-    pdf_bytes = render_to_pdf(tmp.resolve())
-    tmp.unlink(missing_ok=True)
+    with tempfile.TemporaryDirectory(prefix="geo-audit-render-") as temp_dir:
+        tmp = Path(temp_dir) / "report.html"
+        tmp.write_text(html, encoding="utf-8")
+        print("Rendering...")
+        pdf_bytes = render_to_pdf(tmp.resolve())
 
     print(f"Saving {output_path}...")
     output_path.write_bytes(pdf_bytes)

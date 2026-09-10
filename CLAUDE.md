@@ -7,7 +7,7 @@
 /geo-audit https://example.com
 ```
 
-The `/geo-audit` skill orchestrates the full audit automatically. It spawns subagents in parallel and writes `GEO-AUDIT-REPORT.md` and `GEO-AUDIT-REPORT.pdf` in the working directory.
+The `/geo-audit` skill orchestrates the audit using specialist roles and writes `GEO-AUDIT-REPORT.md` and `GEO-AUDIT-REPORT.pdf` in a unique run directory. It can perform roles sequentially when delegation is unavailable.
 
 ## Skill & Agent Map
 
@@ -23,4 +23,4 @@ The `/geo-audit` skill orchestrates the full audit automatically. It spawns suba
 
 ## PDF Generation
 
-The audit automatically runs `scripts/geo-audit-pdf.py` after writing the markdown report. See `scripts/README.md` for setup instructions.
+The audit runs the bundled `scripts/geo-audit-pdf.py` after writing the markdown report. See `README.md` for setup and limitations. Five core roles assess readiness; platform observations are optional. Save evidence and reports in a unique run directory.
