@@ -1,0 +1,27 @@
+{
+  "version": "1.2.0",
+  "description": "Editorial readiness of the declared sample, not measured AI visibility or a ranking predictor. Equal criterion weights within each category.",
+  "aggregation": "For each criterion, review every applicable page in the declared sample. 0 means no applicable pages meet the anchor; 50 means some but not all meet it; 100 means all meet it. An unobserved applicable page makes the criterion unknown. For authority, record the searched external sources and judge support for the sample's material claims, not global reputation. Explain the reviewed units and exceptions in each rationale.",
+  "categories": {
+    "citability": {"weight": 0.25, "criteria": [
+      {"id": "direct_answers", "anchor": "Main content explicitly answers the page's primary customer question.", "evidence": "Captured main content and stated customer question.", "na_reasons": []},
+      {"id": "specific_information", "anchor": "Main content gives concrete, attributable details sufficient to understand its offer or subject.", "evidence": "Relevant content excerpts identifying details and their attribution.", "na_reasons": []}
+    ]},
+    "authority": {"weight": 0.30, "criteria": [
+      {"id": "identity_consistency", "anchor": "Business identity is consistent across sampled pages and checked external sources.", "evidence": "Identity excerpts with the external sources searched and entity-matching rationale.", "na_reasons": []},
+      {"id": "independent_support", "anchor": "Material business/expertise claims have relevant independent corroboration within the documented search scope.", "evidence": "Claims, search queries, dates, source captures and bounded not-found observations.", "na_reasons": []}
+    ]},
+    "content": {"weight": 0.20, "criteria": [
+      {"id": "customer_completeness", "anchor": "Content covers the stated customer question, relevant conditions and next steps without material omissions.", "evidence": "Question and content excerpts, including identified missing information.", "na_reasons": []},
+      {"id": "accountability", "anchor": "Content identifies an accountable business or author and supports material claims with appropriate sources or first-hand evidence.", "evidence": "Accountability details and claim-support excerpts; author bylines are not universally required.", "na_reasons": []}
+    ]},
+    "technical": {"weight": 0.15, "criteria": [
+      {"id": "content_access", "anchor": "Captured deployed responses successfully expose useful main content rather than an error, challenge or empty shell.", "evidence": "Response status, main content and rendered observation where needed; a generic client does not prove access for all crawlers.", "na_reasons": []},
+      {"id": "search_directives", "anchor": "Observed effective search-crawler robots rules and page directives do not block the intended public sample.", "evidence": "Robots response, effective group/path reasoning, response headers and page directives. Training opt-outs do not fail this check.", "na_reasons": []}
+    ]},
+    "schema": {"weight": 0.10, "criteria": [
+      {"id": "markup_syntax", "anchor": "Observed structured data has valid syntax for its declared encoding.", "evidence": "Raw markup blocks and parser diagnostics. Missing markup alone is not a defect.", "na_reasons": ["no_structured_data_in_sample"]},
+      {"id": "markup_parity", "anchor": "Observed structured data agrees with visible content and consistently identifies its entities.", "evidence": "Markup and visible-content pairs with entity references. Syntax inventory alone cannot establish this.", "na_reasons": ["no_structured_data_in_sample"]}
+    ]}
+  }
+}

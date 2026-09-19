@@ -1,6 +1,7 @@
 import importlib.util
 from pathlib import Path
 import unittest
+from test_evidence_contract import capture
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -14,21 +15,25 @@ pdf = module("pdf", "geo-audit-pdf.py")
 evidence = module("evidence", "evidence.py")
 scoring = module("scoring", "score.py")
 
+def legacy(body="Body text", score="50/100"):
+    return ("**Audit Date:** 2026-09-10\n**URL:** https://example.com/\n"
+            "**Business Type:** Test business\n**Pages Analyzed:** 1\n"
+            f"**Overall GEO Score: {score}**\n{body}")
 
 class Reliability(unittest.TestCase):
     def test_decimal_score(self):
-        self.assertEqual(pdf.parse_report("**Overall GEO Score: 72.5/100**")["overall_score"], 72.5)
+        self.assertEqual(pdf.parse_report(legacy(score="72.5/100"))["overall_score"], 72.5)
 
     def test_invalid_scores(self):
-        for text in ("No score", "**Overall GEO Score: 999/100**"):
+        for text in (legacy().replace("**Overall GEO Score: 50/100**", "No score"), legacy(score="999/100")):
             with self.assertRaises(ValueError):
                 pdf.parse_report(text)
 
     def test_unassessed(self):
-        self.assertIsNone(pdf.parse_report("**Overall GEO Score: Not assessed**")["overall_score"])
+        self.assertIsNone(pdf.parse_report(legacy(score="Not assessed"))["overall_score"])
 
     def test_fenced_heading(self):
-        data = pdf.parse_report("**Overall GEO Score: 50/100**\n## Findings\n```markdown\n## Example\n```")
+        data = pdf.parse_report(legacy("## Findings\n```markdown\n## Example\n```"))
         self.assertEqual(len(data["sections"]), 1)
         self.assertIn("## Example", data["sections"][0]["content"])
 
@@ -43,8 +48,10 @@ class Reliability(unittest.TestCase):
         self.assertNotIn("onmouseover", attributes)
 
     def test_metadata_escaped(self):
-        data = pdf.parse_report('**URL:** <script>alert(1)</script>\n**Overall GEO Score: 50/100**')
+        data = pdf.parse_report(legacy().replace("Test business", "<script>alert(1)</script>"))
         self.assertNotIn("<script>alert", pdf.generate_html(data))
+        with self.assertRaises(ValueError):
+            pdf.parse_report(legacy().replace("https://example.com/", "<script>alert(1)</script>"))
 
     def test_schema_arrays_graph_whitespace(self):
         text = '<script type="application/ld+json">[{"@type": "Organization"}]</script><script type="application/ld+json">{"@graph":[{"@type":["WebSite","Thing"]},{"@id":"#org"}]}</script>'
@@ -59,12 +66,18 @@ class Reliability(unittest.TestCase):
         self.assertTrue(result["errors"])
 
     def test_score_missing(self):
-        self.assertIsNone(scoring.calculate({})["overall"])
+        self.assertIsNone(scoring.calculate({"rubric_version": "1.2.0", "evidence": [], "criteria": {}})["overall"])
 
     def test_weighted_score(self):
-        data = {key: [{"id":"a","status":"assessed","value":80,"evidence_ids":["p1"]}] for key in scoring.WEIGHTS}
-        self.assertEqual(scoring.calculate(data)["overall"], 80)
-        data["schema"].append({"id":"b","status":"unknown"})
+        rubric, _ = scoring.load_rubric("1.2.0")
+        data = {"rubric_version": "1.2.0", "evidence": [capture()], "criteria": {
+            key: [{"id": rule["id"], "status": "assessed", "value": 50,
+                   "rationale": "Synthetic test observation", "evidence_ids": ["page-1"]}
+                  for rule in profile["criteria"]] for key, profile in rubric["categories"].items()}}
+        self.assertEqual(scoring.calculate(data)["overall"], 50)
+        item = data["criteria"]["schema"][0]
+        item["status"] = "unknown"
+        del item["value"]
         self.assertIsNone(scoring.calculate(data)["overall"])
 
     def test_score_requires_evidence(self):

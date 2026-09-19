@@ -7,7 +7,7 @@
 /geo-audit https://example.com
 ```
 
-The `/geo-audit` skill orchestrates the audit using specialist roles and writes `GEO-AUDIT-REPORT.md` and `GEO-AUDIT-REPORT.pdf` in a unique run directory. It can perform roles sequentially when delegation is unavailable.
+The `/geo-audit` skill orchestrates the audit using explicitly loaded bundled roles and writes validated `run.json`, HTML and PDF in a unique run directory. It can perform roles sequentially when delegation is unavailable. Read `docs/RUN-FORMAT.md`, `docs/AUDIT-DEPTH.md` and `docs/CLIENT-REPORT.md` for toolkit 1.3.0. Core scoring retains immutable rubric 1.2.0; detailed review is separate. Default reports are comprehensive and client-facing; `--technical` exports raw evidence separately.
 
 ## Skill & Agent Map
 
@@ -23,4 +23,4 @@ The `/geo-audit` skill orchestrates the audit using specialist roles and writes 
 
 ## PDF Generation
 
-The audit runs the bundled `scripts/geo-audit-pdf.py` after writing the markdown report. See `README.md` for setup and limitations. Five core roles assess readiness; platform observations are optional. Save evidence and reports in a unique run directory.
+The audit runs `scripts/run_contract.py run.json` before `scripts/geo-audit-pdf.py run.json report.pdf`. See `README.md` for setup and limitations. Five core roles assess readiness; optional platform observations are separate and no live collection integration exists. Save evidence and reports in a unique run directory.

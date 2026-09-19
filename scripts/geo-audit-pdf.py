@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-Generate a branded PDF from GEO-AUDIT-REPORT.md
+Generate branded HTML/PDF from a validated audit run JSON.
 
-Converts a GEO audit markdown report to a branded A4 PDF.
-Uses Playwright's native page.pdf() for text-based output with selectable
-text and proper CSS page-break support (tables never split mid-page).
+Uses Playwright's native page.pdf() for selectable text. Long tables span pages
+with repeated table headers. Legacy Markdown requires explicit opt-in and its
+scores are labeled unverified. See docs/RUN-FORMAT.md for the run contract.
 
 Usage:
-  python3 scripts/geo-audit-pdf.py
-  python3 scripts/geo-audit-pdf.py GEO-AUDIT-REPORT.md
-  python3 scripts/geo-audit-pdf.py report.md output.pdf
+  python3 scripts/geo-audit-pdf.py run.json output.html
+  python3 scripts/geo-audit-pdf.py run.json output.pdf
+  python3 scripts/geo-audit-pdf.py report.md output.pdf --legacy-markdown
 
 Branding (optional env vars):
   GEO_AUDIT_AUTHOR   Your name  (default: "GEO Audit")
@@ -29,18 +29,11 @@ import re
 from pathlib import Path
 import html as html_lib
 import tempfile
-import markdown
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # Branding — override with env vars
 AUTHOR = os.environ.get("GEO_AUDIT_AUTHOR", "GEO Audit")
 DOMAIN = os.environ.get("GEO_AUDIT_DOMAIN", "")
-
-try:
-    from playwright.sync_api import sync_playwright
-except ImportError as e:
-    print(f"Missing dependency: {e}")
-    print("Install with: pip install playwright && playwright install chromium")
-    sys.exit(1)
 
 
 # A4 at 96 dpi
@@ -83,9 +76,13 @@ def escape_html(text: str) -> str:
 
 
 def md_to_html(text: str) -> str:
-    """Render Markdown as text; raw HTML is escaped and links are validated."""
+    """Parse first, then allowlist HTML so code and blockquotes retain meaning."""
     from html.parser import HTMLParser
     from urllib.parse import urlsplit
+    try:
+        import markdown
+    except ImportError as exc:
+        raise RuntimeError("Install reporting dependencies: pip install -r scripts/requirements.txt") from exc
 
     class SafeHTML(HTMLParser):
         def __init__(self):
@@ -93,26 +90,39 @@ def md_to_html(text: str) -> str:
             self.parts = []
 
         def handle_starttag(self, tag, attrs):
+            allowed = {"p", "br", "hr", "h1", "h2", "h3", "h4", "h5", "h6", "em", "strong", "del",
+                       "ul", "ol", "li", "blockquote", "pre", "code", "table", "thead", "tbody", "tr", "th", "td", "a"}
+            if tag == "img":
+                self.parts.append(html_lib.escape("[Image omitted: " + (dict(attrs).get("alt") or "no description") + "]"))
+                return
+            if tag not in allowed:
+                self.parts.append(html_lib.escape(self.get_starttag_text()))
+                return
             safe = []
             for key, value in attrs:
-                if key.startswith("on") or key == "style":
+                if tag != "a" or key not in {"href", "title"}:
                     continue
-                if key in ("href", "src"):
-                    if urlsplit(value or "").scheme.lower() not in ("", "http", "https", "mailto"):
+                if key == "href":
+                    try:
+                        parsed = urlsplit(value or "")
+                        if parsed.scheme.lower() not in {"http", "https", "mailto"} and not (value or "").startswith("#"):
+                            continue
+                        if parsed.scheme in {"http", "https"} and not parsed.hostname:
+                            continue
+                    except ValueError:
                         continue
-                    if key == "src":
-                        continue  # Reports do not fetch external images.
                 safe.append(f' {key}="{html_lib.escape(value or "", quote=True)}"')
-            if tag == "img":
-                return
             self.parts.append("<" + tag + "".join(safe) + ">")
 
         def handle_endtag(self, tag):
-            if tag != "img":
+            if tag in {"p", "h1", "h2", "h3", "h4", "h5", "h6", "em", "strong", "del", "ul", "ol", "li",
+                       "blockquote", "pre", "code", "table", "thead", "tbody", "tr", "th", "td", "a"}:
                 self.parts.append(f"</{tag}>")
+            elif tag not in {"img", "br", "hr"}:
+                self.parts.append(html_lib.escape(f"</{tag}>"))
 
         def handle_data(self, data):
-            self.parts.append(data)
+            self.parts.append(html_lib.escape(data, quote=False))
 
         def handle_entityref(self, name):
             self.parts.append(f"&{name};")
@@ -120,8 +130,9 @@ def md_to_html(text: str) -> str:
         def handle_charref(self, name):
             self.parts.append(f"&#{name};")
 
-    rendered = markdown.markdown(html_lib.escape(text, quote=False),
-                                 extensions=["tables", "fenced_code"])
+    rendered = markdown.markdown(text, extensions=["tables", "fenced_code"])
+    rendered = re.sub(r"(<li>(?:<p>)?)\[([ xX])\] ",
+                      lambda m: m[1] + ("☑ " if m[2].lower() == "x" else "☐ "), rendered)
     parser = SafeHTML()
     parser.feed(rendered)
     return "".join(parser.parts)
@@ -134,6 +145,8 @@ def inline_md(text: str) -> str:
 
 def parse_report(text: str) -> dict:
     """Extract metadata and section list from the markdown report."""
+    if "\x00" in text:
+        raise ValueError("NUL characters are not supported in Markdown reports")
     data: dict = {
         "url": "",
         "date": "",
@@ -145,45 +158,65 @@ def parse_report(text: str) -> dict:
         "executive_summary": "",
     }
 
-    # Only scan the first 20 lines for header metadata —
-    # later sections also contain **URL:** lines (per-issue URLs) which
-    # would otherwise overwrite the report-level URL.
-    for line in text.split("\n")[:20]:
-        if line.startswith("**Audit Date:**"):
-            data["date"] = line.split("**Audit Date:**")[1].strip()
-        elif line.startswith("**URL:**"):
-            data["url"] = line.split("**URL:**")[1].strip()
-        elif line.startswith("**Business Type:**"):
-            data["business_type"] = line.split("**Business Type:**")[1].strip()
-        elif line.startswith("**Pages Analyzed:**"):
-            data["pages_analyzed"] = line.split("**Pages Analyzed:**")[1].strip()
-
-    # Ignore fenced examples when extracting the report score and sections.
-    lines = []
+    # Legacy Markdown is an explicit, unverified import path. Only top-level
+    # declarations outside fenced/indented code are authoritative metadata.
+    lines, declarations = [], []
     fence = None
+    in_header = True
+    labels = {"Audit Date": "date", "URL": "url", "Business Type": "business_type", "Pages Analyzed": "pages_analyzed"}
+    seen = set()
     for line in text.splitlines():
-        match = re.match(r"^\s*(`{3,}|~{3,})", line)
+        match = re.match(r"^ {0,3}(`{3,}|~{3,})", line)
         if match:
             token = match.group(1)
             if fence is None:
                 fence = token
-            elif token[0] == fence[0] and len(token) >= len(fence):
+            elif token[0] == fence[0] and len(token) >= len(fence) and not line[match.end():].strip():
                 fence = None
             lines.append(line)
-        elif fence and line.startswith("## "):
-            lines.append("\x00" + line)
+            continue
+        if fence:
+            lines.append("\x00" + line if line.startswith("## ") else line)
+            continue
+        if line.startswith("## "):
+            in_header = False
+        meta = re.fullmatch(r"\*\*(Audit Date|URL|Business Type|Pages Analyzed):\*\*\s*(.*)", line)
+        if meta and in_header:
+            key = labels[meta[1]]
+            if key in seen:
+                raise ValueError(f"Duplicate metadata: {meta[1]}")
+            seen.add(key)
+            data[key] = meta[2].strip()
+            continue
+        score = re.fullmatch(r"\*\*Overall GEO Score:\s*(.*?)\*\*\s*", line)
+        if score:
+            declarations.append(score[1])
+        elif line.startswith("**Overall GEO Score:"):
+            raise ValueError("Malformed score declaration")
         else:
             lines.append(line)
+    if fence:
+        raise ValueError("Unclosed code fence")
+    if seen != set(labels.values()):
+        raise ValueError("Missing report header metadata")
+    from datetime import date
+    from run_contract import web_url
+    web_url(data["url"])
+    if date.fromisoformat(data["date"]).isoformat() != data["date"]:
+        raise ValueError("Audit Date must be YYYY-MM-DD")
+    if not data["business_type"] or not re.fullmatch(r"[1-9]\d*", data["pages_analyzed"]):
+        raise ValueError("Business Type and a positive Pages Analyzed count are required")
+    if len(declarations) != 1:
+        raise ValueError("Exactly one overall score declaration is required")
     protected = "\n".join(lines)
-    score_text = re.sub(r"(?ms)^[ \t]*(`{3,}|~{3,}).*?^\s*\1[^\n]*$", "", protected)
-    m = re.search(r"\*\*Overall GEO Score:\s*(\d+(?:\.\d+)?)/100", score_text)
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)/100", declarations[0])
     if m:
         s = float(m.group(1))
         if not 0 <= s <= 100:
             raise ValueError("Overall score must be between 0 and 100")
         data["overall_score"] = int(s) if s.is_integer() else s
         data["score_label"] = score_label(s)
-    elif not re.search(r"Overall GEO Score:\s*Not assessed", score_text, re.I):
+    elif declarations[0].lower() != "not assessed":
         raise ValueError("Missing or invalid overall score")
     else:
         data["score_label"] = "Not assessed"
@@ -191,7 +224,7 @@ def parse_report(text: str) -> dict:
     parts = re.split(r"^(## .+)$", protected, flags=re.MULTILINE)
     parts = [part.replace("\x00", "") for part in parts]
 
-    data["executive_summary"] = ""  # Header metadata is already displayed on the cover.
+    data["executive_summary"] = parts[0].strip()
 
     current: dict | None = None
     for part in parts[1:]:
@@ -204,7 +237,11 @@ def parse_report(text: str) -> dict:
 
     if current:
         data["sections"].append(current)
-
+    body_text = data["executive_summary"] + "\n" + "\n".join(s["content"] for s in data["sections"])
+    if not re.sub(r"(?m)^#{1,6}\s.*$", "", body_text).strip():
+        raise ValueError("Report has no body content")
+    data["executive_summary"] = "Legacy Markdown import: evidence and scores are not verified.\n\n" + data["executive_summary"]
+    data["score_label"] = "Unverified legacy score"
     return data
 
 
@@ -213,6 +250,9 @@ def parse_report(text: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def generate_html(data: dict) -> str:
+    if data.get("client_report"):
+        from client_report import render_client_html
+        return render_client_html(data, AUTHOR, DOMAIN)
     score = data["overall_score"]
     color = score_color(score) if score is not None else "#71717A"
     score = score if score is not None else "—"
@@ -224,17 +264,23 @@ def generate_html(data: dict) -> str:
         raise ValueError("GEO_AUDIT_DOMAIN must be a hostname")
     domain_link = f'<a href="https://{domain_safe}" style="color:inherit;text-decoration:none;">{domain_safe}</a>' if DOMAIN else ""
 
+    def body(text, format="markdown"):
+        if format == 'blocks':
+            from client_report import render_blocks
+            return render_blocks(text)
+        return '<div class="plain-text">' + html_lib.escape(text) + '</div>' if format == "plain" else md_to_html(text)
+
     sections_html = "".join(
         f'<section class="report-section">'
         f'<h2>{inline_md(s["heading"])}</h2>'
-        f'<div class="section-body">{md_to_html(s["content"])}</div>'
+        f'<div class="section-body">{body(s["content"], s.get("format", "markdown"))}</div>'
         f'</section>'
         for s in data["sections"]
     )
 
     meta_items = [
         ("Business Type", data["business_type"]),
-        ("Pages Analyzed", data["pages_analyzed"]),
+        (data.get('sample_label', "Pages Analyzed"), data["pages_analyzed"]),
         ("Audit Date", data["date"]),
     ]
     meta_html = "".join(
@@ -244,15 +290,15 @@ def generate_html(data: dict) -> str:
         f'</div>'
         for k, v in meta_items if v
     )
+    cover_score = (f'<p class="cover-note">{data["cover_note"]}</p>' if data.get('cover_note') else
+        f'<div class="score-ring"><div class="score-num">{score}</div><div class="score-denom">/100</div><div class="score-label">{data["score_label"]}</div></div>')
 
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GEO Audit Report — {url_display}</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
   *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
 
@@ -586,6 +632,7 @@ def generate_html(data: dict) -> str:
   /* ── Tables ───────────────────────────── */
   table {{
     width: 100%;
+    table-layout: fixed;
     border-collapse: collapse;
     margin: 14px 0;
     font-size: 12px;
@@ -624,7 +671,7 @@ def generate_html(data: dict) -> str:
   @media print {{
     @page {{ margin: 0; }}
     .cover {{ break-after: page; }}
-    table {{ break-inside: avoid; }}
+    table {{ break-inside: auto; }}
     tr {{ break-inside: avoid; }}
     thead {{ display: table-header-group; }}
     h2 {{ break-after: avoid; }}
@@ -660,6 +707,25 @@ def generate_html(data: dict) -> str:
     font-size: 10px;
     color: var(--muted);
   }}
+  th, td, a, p, .cover-url, .plain-text {{ overflow-wrap: anywhere; word-break: break-word; }}
+  .plain-text, pre, pre code {{ white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }}
+  .plain-text {{ margin: 12px 0; }}
+  .cover-note {{ max-width: 540px; font-size: 20px; margin-bottom: 40px; }}
+  .source-links {{ font-size: 11px; line-height: 1.6; }}
+  h4 {{ font-size: 14px; margin: 18px 0 6px; break-after: avoid; text-transform: none; letter-spacing: normal; line-height: 1.5; }}
+  .cover-meta-item:last-child {{ min-width: 95px; }}
+  @media screen and (max-width: 794px) {{
+    body {{ width: 100%; }}
+    .cover {{ width: 100%; min-height: auto; padding: 32px 24px; }}
+    .cover-top {{ margin-bottom: 36px; }}
+    .cover-title {{ font-size: 40px; }}
+    .cover-meta {{ flex-wrap: wrap; gap: 20px; }}
+    .content-wrap, .exec-block, .page-header, .page-footer {{ width: auto; max-width: 100%; margin-left: 0; margin-right: 0; padding-left: 24px; padding-right: 24px; }}
+    table {{ table-layout: fixed; width: 100%; }}
+  }}
+  @media print {{
+    pre, blockquote, ul, ol, p {{ break-inside: auto; }}
+  }}
 </style>
 </head>
 <body>
@@ -675,11 +741,7 @@ def generate_html(data: dict) -> str:
   <div class="cover-title">GEO Audit<br>Report</div>
   <div class="cover-url">{data['url']}</div>
 
-  <div class="score-ring">
-    <div class="score-num">{score}</div>
-    <div class="score-denom">/100</div>
-    <div class="score-label">{data['score_label']}</div>
-  </div>
+  {cover_score}
 
   <div class="cover-meta">{meta_html}</div>
 
@@ -698,7 +760,7 @@ def generate_html(data: dict) -> str:
 
 <!-- Executive Summary -->
 <div class="exec-block">
-{md_to_html(data['executive_summary'])}
+{body(data['executive_summary'], data.get('summary_format', 'markdown'))}
 </div>
 
 <!-- All sections -->
@@ -728,6 +790,10 @@ SYSTEM_CHROME = "/usr/bin/google-chrome"
 def render_to_pdf(html_path: Path) -> bytes:
     """Render the HTML to a text-based A4 PDF using Playwright's native export."""
     import shutil
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:
+        raise RuntimeError("Install playwright and run: playwright install chromium") from exc
     exe = os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or (
         SYSTEM_CHROME if shutil.which(SYSTEM_CHROME) else None
     )
@@ -743,11 +809,15 @@ def render_to_pdf(html_path: Path) -> bytes:
         page.route("https://**/*", lambda route: route.abort())
         page.goto(html_path.as_uri())
         page.wait_for_load_state("networkidle")
-        pdf_bytes = page.pdf(
-            format="A4",
-            print_background=True,
-            margin={"top": "0", "right": "0", "bottom": "0", "left": "0"},
-        )
+        client = page.locator('meta[name="geo-client-report"]').count() > 0
+        options = dict(format="A4", print_background=True, tagged=True, outline=True)
+        if client:
+            options.update(prefer_css_page_size=True, display_header_footer=True,
+                header_template='<span></span>',
+                footer_template='<div style="width:100%;text-align:center;font:9px sans-serif;color:#464644">GEO Audit · <span class="pageNumber"></span> / <span class="totalPages"></span></div>')
+        else:
+            options['margin'] = {"top": "0", "right": "0", "bottom": "0", "left": "0"}
+        pdf_bytes = page.pdf(**options)
         browser.close()
     return pdf_bytes
 
@@ -756,42 +826,45 @@ def render_to_pdf(html_path: Path) -> bytes:
 # Entry point
 # ---------------------------------------------------------------------------
 
-def main() -> None:
-    args = sys.argv[1:]
-
-    if args and args[0] in ("-h", "--help"):
-        print(__doc__)
-        sys.exit(0)
-
-    report_path = Path(args[0]) if args else Path("GEO-AUDIT-REPORT.md")
-    output_path = Path(args[1]) if len(args) > 1 else report_path.with_suffix(".pdf")
-
-    if not report_path.exists():
-        print(f"Report not found: {report_path}")
-        sys.exit(1)
-
-    print(f"Reading {report_path}...")
-    md = report_path.read_text(encoding="utf-8")
-
-    print("Parsing...")
-    data = parse_report(md)
-    print(f"  Score: {data['overall_score']}/100 ({data['score_label']})")
-    print(f"  URL:   {data['url']}")
-    print(f"  Sections: {len(data['sections'])}")
-
-    print("Generating HTML...")
+def export_report(report_path, output_path, *, overwrite=False, legacy_markdown=False, technical=False):
+    from evidence import strict_json
+    from run_contract import report_data
+    from safe_io import check_output, atomic_write
+    report_path, output_path = Path(report_path), Path(output_path)
+    check_output(report_path, output_path, overwrite)
+    if output_path.suffix.lower() not in {".html", ".pdf"}:
+        raise ValueError("Output must end in .html or .pdf")
+    text = report_path.read_text(encoding="utf-8")
+    if technical and legacy_markdown:
+        raise ValueError('--technical requires a validated JSON run')
+    data = parse_report(text) if legacy_markdown else report_data(strict_json(text), technical=technical)
     html = generate_html(data)
-
+    if output_path.suffix.lower() == ".html":
+        atomic_write(report_path, output_path, html.encode("utf-8"), overwrite)
+        return
     with tempfile.TemporaryDirectory(prefix="geo-audit-render-") as temp_dir:
         tmp = Path(temp_dir) / "report.html"
         tmp.write_text(html, encoding="utf-8")
-        print("Rendering...")
         pdf_bytes = render_to_pdf(tmp.resolve())
+    if not pdf_bytes.startswith(b"%PDF-"):
+        raise ValueError("Renderer did not return a PDF")
+    atomic_write(report_path, output_path, pdf_bytes, overwrite)
 
-    print(f"Saving {output_path}...")
-    output_path.write_bytes(pdf_bytes)
 
-    print(f"\nDone: {output_path}")
+def main() -> None:
+    import argparse
+    parser = argparse.ArgumentParser(description="Render a validated run JSON to HTML or PDF.")
+    parser.add_argument("report", type=Path)
+    parser.add_argument("output", type=Path)
+    parser.add_argument("--overwrite", action="store_true", help="Explicitly replace an existing output, never the input")
+    parser.add_argument("--legacy-markdown", action="store_true", help="Import unverified legacy Markdown with a visible warning")
+    parser.add_argument('--technical', action='store_true', help='Export internal criteria and full captured evidence instead of the client report')
+    args = parser.parse_args()
+    try:
+        export_report(args.report, args.output, overwrite=args.overwrite, legacy_markdown=args.legacy_markdown, technical=args.technical)
+    except Exception as exc:
+        parser.exit(2, f"Report failed: {exc}\n")
+    print(f"Saved {args.output}")
 
 
 if __name__ == "__main__":

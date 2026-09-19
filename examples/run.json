@@ -1,0 +1,23 @@
+{
+  "schema_version": "1.2.0",
+  "metadata": {
+    "url": "https://example.com/",
+    "date": "2026-09-10",
+    "business_type": "Demonstration only",
+    "market": "Not selected — demonstration",
+    "language": "en",
+    "sample": ["https://example.com/"],
+    "sampling_rationale": "Demonstration template only. No website was collected."
+  },
+  "assessment": {
+    "rubric_version": "1.2.0",
+    "evidence": [],
+    "criteria": {}
+  },
+  "summary": "Demonstration template. All checks are unassessed; no live website or AI answers have been collected.",
+  "limitations": [
+    "This is not a completed audit. Add actual captured evidence and reviewed criterion observations before assessing readiness.",
+    "AI visibility has not been measured."
+  ],
+  "findings": []
+}
