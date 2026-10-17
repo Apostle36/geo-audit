@@ -2,7 +2,8 @@
 
 Repository and installed-bundle layouts are supported. Atomic upgrades require
 Linux renameat2; unsupported systems fail without touching the active install.
-Global agent definitions are diagnosed, never overwritten.
+Global agent definitions are diagnosed, never overwritten. The newest backups
+are kept (five by default); older ones are dropped from the new package.
 """
 import argparse
 import ctypes
@@ -12,8 +13,11 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import tempfile
+
+KEEP_BACKUPS = 5
 
 
 def exchange(a, b):
@@ -28,7 +32,9 @@ def exchange(a, b):
         raise OSError(code, os.strerror(code))
 
 
-def install(directory, *, source_root=None):
+def install(directory, *, source_root=None, keep_backups=KEEP_BACKUPS):
+    if keep_backups < 1:
+        raise ValueError("Keep at least one backup")
     root = Path(source_root or Path(__file__).resolve().parent.parent).resolve()
     parent = Path(directory).expanduser().resolve()
     destination = parent / "geo-audit"
@@ -42,7 +48,8 @@ def install(directory, *, source_root=None):
     required = [skill, root / "scripts/evidence.py", root / "scripts/score.py", root / "scripts/run_contract.py",
                 root / "scripts/safe_io.py", root / "scripts/geo-audit-pdf.py", root / "scripts/install.py",
                 root / "scripts/requirements.txt", root / "scripts/rubrics/1.2.0.json", root / "docs/RUN-FORMAT.md",
-                root / 'scripts/client_report.py', root / 'scripts/review_topics.py',
+                root / 'scripts/client_report.py', root / 'scripts/review_topics.py', root / 'scripts/version.py',
+                root / 'scripts/collect.py', root / 'scripts/new_run.py',
                 root / 'docs/AUDIT-DEPTH.md', root / 'docs/CLIENT-REPORT.md']
     roles = ["geo-ai-visibility", "brand-radar", "geo-technical", "geo-content", "geo-schema", "geo-platform-analysis"]
     required += [agents / f"{role}.md" for role in roles]
@@ -74,7 +81,7 @@ def install(directory, *, source_root=None):
                 global_role = parent.parent / "agents" / f"{role}.md"
                 if global_role.is_file() and global_role.read_bytes() != (stage / "agents" / f"{role}.md").read_bytes():
                     collisions.append(str(global_role))
-            backup = None
+            backup, pruned = None, 0
             if destination.exists():
                 stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
                 if (destination / ".backups").exists():
@@ -82,23 +89,36 @@ def install(directory, *, source_root=None):
                 backup = stage / ".backups" / stamp
                 shutil.copytree(destination, backup, symlinks=True,
                                 ignore=shutil.ignore_patterns(".backups", "__pycache__"))
+                # Backup names are UTC timestamps, so name order is age order.
+                backups = [path for path in (stage / ".backups").iterdir() if path.is_dir() and not path.is_symlink()]
+                for old in sorted(backups)[:-keep_backups]:
+                    shutil.rmtree(old)
+                    pruned += 1
                 exchange(stage, destination)
                 backup = destination / ".backups" / stamp
             else:
                 os.rename(stage, destination)
-            return {"destination": str(destination), "backup": str(backup) if backup else None,
+            return {"destination": str(destination), "version": package_version(destination),
+                    "backup": str(backup) if backup else None, "pruned_backups": pruned,
                     "different_global_roles": collisions, "files": len(hashes)}
         finally:
             if stage.exists():
                 shutil.rmtree(stage)
 
 
+def package_version(package):
+    match = re.search(r'^TOOLKIT_VERSION = "([^"]+)"', (package / "scripts/version.py").read_text(encoding="utf-8"),
+                      re.MULTILINE)
+    return match[1] if match else None
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directory", type=Path)
+    parser.add_argument("--keep-backups", type=int, default=KEEP_BACKUPS, help="Number of previous installs to keep")
     args = parser.parse_args()
     try:
-        print(json.dumps(install(args.directory), indent=2))
+        print(json.dumps(install(args.directory, keep_backups=args.keep_backups), indent=2))
     except (ValueError, OSError, RuntimeError) as exc:
         parser.exit(2, f"Install failed: {exc}\n")
 

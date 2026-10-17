@@ -62,12 +62,18 @@ class ClientDecisions(unittest.TestCase):
         self.assertIn('id="finding-1"',output)
 
     def test_integrity_rejects_lost_detail_and_broken_link(self):
-        run=detailed_run();output=self.render(run);model=report_model(run)
-        with self.assertRaises(ValueError):check_report_integrity(output.replace('Captured content',''),run,model)
-        with self.assertRaises(ValueError):check_report_integrity(output+'<a href="#nonexistent">go</a>',run,model)
+        run=detailed_run()
+        output=self.render(run)
+        model=report_model(run)
+        with self.assertRaises(ValueError):
+            check_report_integrity(output.replace('Captured content',''),run,model)
+        with self.assertRaises(ValueError):
+            check_report_integrity(output+'<a href="#nonexistent">go</a>',run,model)
 
     def test_score_scope_locale_and_input_preservation(self):
-        run=detailed_run(); before=copy.deepcopy(run);scores=validate_run(run)
+        run=detailed_run()
+        before=copy.deepcopy(run)
+        scores=validate_run(run)
         output=self.render(run)
         self.assertIn('10 September 2026',output)
         self.assertIn('lang="en-GB"',output)
@@ -76,17 +82,20 @@ class ClientDecisions(unittest.TestCase):
         self.assertEqual(validate_run(run),scores)
 
     def test_font_override_fails_clearly_when_incomplete(self):
-        with patch.dict('os.environ',{'GEO_AUDIT_FONT_DIR':'/nonexistent/brand-fonts'}):
-            with self.assertRaisesRegex(ValueError,'report font'):font_css()
+        with patch.dict('os.environ',{'GEO_AUDIT_FONT_DIR':'/nonexistent/brand-fonts'}), \
+                self.assertRaisesRegex(ValueError,'report font'):
+            font_css()
 
     def test_every_finding_kind_and_all_topics_have_destinations(self):
         run=detailed_run()
         for i,kind in enumerate(('observation','recommendation','hypothesis','unknown')):
-            f=copy.deepcopy(run['findings'][0]);f.update(id=f'F{i+2}',kind=kind,severity='medium',status='unknown' if kind=='unknown' else 'present')
+            f=copy.deepcopy(run['findings'][0])
+            f.update(id=f'F{i+2}',kind=kind,severity='medium',status='unknown' if kind=='unknown' else 'present')
             run['findings'].append(f)
         output=self.render(run)
         check_report_integrity(output,run,report_model(run))
-        for i in range(1,6):self.assertIn(f'id="finding-{i}"',output)
+        for i in range(1,6):
+            self.assertIn(f'id="finding-{i}"',output)
 
     def test_unknown_core_check_is_not_hidden_by_complete_detailed_reviews(self):
         from review_topics import TOPICS
@@ -98,6 +107,53 @@ class ClientDecisions(unittest.TestCase):
         plan=output.split('id="actions"')[1].split('<nav')[0]
         self.assertIn('href="#core-check-independent_support"',plan)
         self.assertIn('id="core-check-independent_support"',output)
+
+    def test_counts_use_correct_plurals(self):
+        run=detailed_run()
+        run['findings'][0].update(severity='medium')
+        output=self.render(run)
+        self.assertIn('1 page in the declared sample · 1 improvement action ·',output)
+        self.assertIn('33 detailed checks remain unresolved',output)
+        self.assertIn('Declared sample: 1 page.',output)
+        self.assertNotIn('1 pages',output)
+
+    def test_previews_do_not_stop_at_abbreviations(self):
+        from client_report import action_preview
+        self.assertEqual(action_preview('Add proof, e.g. named client results. Then measure.'),
+                         'Add proof, e.g. named client results.')
+        self.assertEqual(action_preview('Cite the U.S. study (approx. 2024) on the page! Later steps follow.'),
+                         'Cite the U.S. study (approx. 2024) on the page!')
+        self.assertEqual(action_preview('No full stop at all'),'No full stop at all')
+
+    def test_query_only_pages_are_distinguishable(self):
+        from client_report import page_label
+        self.assertEqual(page_label('https://example.com/?p=12'),'Homepage (?p=12)')
+        self.assertEqual(page_label('https://example.com/our-services/'),'our services')
+
+    def test_content_language_marks_run_prose_only(self):
+        from client_report import render_client_html
+        run=detailed_run()
+        run['summary']='Ελληνική περίληψη'
+        run['findings'][0].update(severity='medium')
+        output=render_client_html(report_data(run),content_lang='el')
+        self.assertIn('<html lang="en-GB">',output)
+        self.assertIn('<p lang="el">Ελληνική περίληψη</p>',output)
+        self.assertIn('<h3 lang="el">Synthetic content observation</h3>',output)
+        self.assertIn('<span lang="el">Captured content</span>',output)
+        check_report_integrity(output,run,report_model(run))
+        self.assertNotIn('lang="el"',self.render(run))
+        for bad in ('el"><script>','x','english language'):
+            with self.subTest(tag=bad), self.assertRaisesRegex(ValueError,'BCP 47'):
+                render_client_html(report_data(run),content_lang=bad)
+        with self.assertRaisesRegex(ValueError,'client reports only'):
+            pdf.generate_html(report_data(run,technical=True),content_lang='el')
+
+    def test_technical_headings_are_not_markdown(self):
+        run=detailed_run()
+        run['findings'][0]['id']='*F1*'
+        output=pdf.generate_html(report_data(run,technical=True))
+        self.assertIn('<h2>Finding *F1*</h2>',output)
+        self.assertNotIn('<em>F1</em>',output)
 
     def test_client_retains_hostname_validation(self):
         from client_report import render_client_html

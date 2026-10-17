@@ -1,7 +1,7 @@
 """Atomic publication without implicit overwrites (local CLI filesystem scope)."""
 import os
 from pathlib import Path
-import tempfile
+import secrets
 
 
 def check_output(source, destination, overwrite=False):
@@ -18,17 +18,35 @@ def check_output(source, destination, overwrite=False):
         raise ValueError("Output parent directory must exist")
 
 
+def check_new(destination):
+    destination = Path(destination)
+    if destination.is_symlink() or destination.exists():
+        raise FileExistsError(f"Output already exists; choose another path: {destination}")
+    if not destination.parent.is_dir():
+        raise ValueError("Output parent directory must exist")
+
+
 def atomic_write(source, destination, content, overwrite=False):
     destination = Path(destination)
     check_output(source, destination, overwrite)
-    descriptor, name = tempfile.mkstemp(prefix=".geo-output-", dir=destination.parent)
-    temporary = Path(name)
+    _publish(destination, content, overwrite, lambda: check_output(source, destination, overwrite))
+
+
+def write_new(destination, content):
+    """Publish a file that has no input to protect, never replacing an existing path."""
+    destination = Path(destination)
+    check_new(destination)
+    _publish(destination, content, False, lambda: check_new(destination))
+
+
+def _publish(destination, content, overwrite, recheck):
+    descriptor, temporary = _temporary(destination.parent)
     try:
         with os.fdopen(descriptor, "wb") as output:
             output.write(content)
             output.flush()
             os.fsync(output.fileno())
-        check_output(source, destination, overwrite)
+        recheck()
         if overwrite:
             os.replace(temporary, destination)
         else:
@@ -36,3 +54,15 @@ def atomic_write(source, destination, content, overwrite=False):
             os.link(temporary, destination)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def _temporary(directory):
+    # Unlike mkstemp's fixed 0600, the creation mode lets the caller's umask decide
+    # who can read a delivered report, as for any other file the user creates.
+    for _ in range(100):
+        name = directory / f".geo-output-{secrets.token_hex(8)}"
+        try:
+            return os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666), name
+        except FileExistsError:
+            continue
+    raise FileExistsError("Could not create a unique temporary output")

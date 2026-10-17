@@ -54,6 +54,7 @@ class CliContract(unittest.TestCase):
             result = self.command('evidence.py', path, '--record-id', 'test')
             self.assertEqual(result.returncode, 2)
             self.assertNotIn('Traceback', result.stderr)
+            self.assertIn('--record-id requires --source, --collected-at and --method', result.stderr)
 
     def test_report_json_cli_and_missing_file(self):
         with tempfile.TemporaryDirectory() as directory:

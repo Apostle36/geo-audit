@@ -53,10 +53,14 @@ python3 scripts/run_contract.py /absolute/path/run.json
 python3 scripts/geo-audit-pdf.py /absolute/path/run.json /absolute/path/report.html
 python3 scripts/geo-audit-pdf.py /absolute/path/run.json /absolute/path/report.pdf
 python3 scripts/geo-audit-pdf.py /absolute/path/run.json /absolute/path/evidence.html --technical
+python3 scripts/geo-audit-pdf.py /absolute/path/run.json /absolute/path/report-el.pdf --content-lang el
 ```
 
 Default exports are comprehensive client reports, not four-page summaries.
-Technical mode preserves all criteria, IDs, hashes and captured content. Both
+Technical HTML preserves all criteria, IDs, hashes, validation warnings and
+captured content. Technical PDF shortens each capture to its first 5,000
+characters with a visible note, because raw captures of a full sample run to
+hundreds of pages; the complete text stays in run.json and technical HTML. Both
 validate the same run and neither invents missing work. Legacy Markdown still
 requires `--legacy-markdown`; it is not upgraded to verified data.
 
@@ -66,16 +70,26 @@ unit test is not sufficient proof of visual or analytical quality. Keep prior
 reports when regenerating; new evidence belongs in a new run.
 
 
-## Presentation upgrade 1.3.1
+## Report language
+
+Template labels are British English. When the run's prose (summary, findings,
+review summaries, rationales, limitations) is written in another language, pass
+its BCP 47 tag with `--content-lang`, for example `el` or `pt-BR`. That prose is
+then marked with the language so screen readers pronounce it correctly; the
+labels stay `en-GB`. The option applies to client reports only.
+
+## Presentation (since 1.3.1)
 
 The default export now leads with a decision summary and a compact action plan.
 For a typical short summary and eight actions, these occupy the first two PDF
 pages; longer inputs flow to further pages without being hidden or discarded.
 Full findings follow in priority order, ahead of the five category reviews.
-The original run schema 1.3.0 and immutable scoring rubric 1.2.0 do not change.
+The run schema and the immutable scoring rubric 1.2.0 are unaffected by presentation.
 
 Action previews use the first sentence of the saved fix (up to 230 characters,
-with an ellipsis when shortened) and link to the complete finding. Write a
+with an ellipsis when shortened) and link to the complete finding. Full stops in
+common abbreviations such as "e.g." and initials such as "U.S." do not end the
+sentence. Write a
 concise first sentence when preparing future runs. The renderer does not use a
 model to rewrite or invent audit conclusions. Full finding fields and review
 summaries remain available; semantic repetition already in the input needs

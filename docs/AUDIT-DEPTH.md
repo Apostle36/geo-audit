@@ -4,18 +4,21 @@ Read this with the orchestrator before a full audit. The ten immutable scored
 criteria are a small comparable core, **not the audit checklist**. Complete the
 detailed review for the five areas below, using the bundled role procedures.
 Topic IDs live in `scripts/review_topics.py`; record their observations in the
-1.3.0 run's `review` list. A topic can be assessed, unknown or not applicable.
+run's `review` list (schema 1.4.0). A topic can be assessed, unknown or not applicable.
 Explain unknowns and exclusions; do not label a skipped check as healthy.
 
 ## Discovery and sampling
 
 1. Establish the business, audience, language and intended market from visible
    content. Label inferences. Ask only when an ambiguity materially changes scope.
-2. Read robots and its sitemap references; expand indexes. Select representative
+2. Read robots and its sitemap references; expand indexes. `scripts/collect.py
+   discover` does both and lists candidate pages. Select representative
    templates and priority journeys, not only the homepage. Record omitted pages
    and sample rationale. Keep utilities such as confirmations out of the scored
    public sample, but record diagnostic checks separately.
-3. Capture responses once and share them. Supplement with rendered observations
+3. Capture responses once with `scripts/collect.py fetch` and share them. Its
+   flags for possible soft 404s, challenges and noindex directives are prompts
+   to verify. Supplement with rendered observations
    when visibility, links, navigation or interactions cannot be established from
    the response. If browser access is unavailable, record the exact unknown.
 4. Inventory existing reports before comparisons. Matching names or domains alone
@@ -84,7 +87,7 @@ unsupported conclusions. Training permission is separate from search access.
 
 ## Detailed coverage versus scoring
 
-Use `schema_version: "1.3.0"` with `review` for new comprehensive audits. Keep
+Use `schema_version: "1.4.0"` with `review` for new comprehensive audits. Keep
 `assessment.rubric_version: "1.2.0"`; never edit or silently replace that rubric.
 An omitted detailed topic displays as not recorded. An unknown topic displays
 as needs checking. The report must not advertise a complete audit when important

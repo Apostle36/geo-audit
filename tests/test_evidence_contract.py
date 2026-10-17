@@ -63,6 +63,28 @@ class EvidenceContract(unittest.TestCase):
                 self.assertIsNone(result["jsonld"][0]["value"])
                 self.assertTrue(result["errors"])
 
+    def test_inline_graphic_titles_are_not_document_titles(self):
+        result = evidence.extract('<head><title>Page</title></head><body><svg><title>Menu icon</title></svg>'
+                                  '<svg/><math><title>Formula</title></math></body>')
+        self.assertEqual([item["text"] for item in result["titles"]], ["Page"])
+        self.assertEqual(result["errors"], [])
+
+    def test_microdata_and_typed_rdfa_are_inventoried(self):
+        result = evidence.extract('<div itemscope itemtype="https://schema.org/Product"><span itemprop="name">X</span></div>'
+                                  '<p vocab="https://schema.org/" typeof="Organization"></p><meta property="og:title" content="x">')
+        self.assertEqual(result["microdata"], {"items": 1, "types": ["https://schema.org/Product"]})
+        self.assertEqual(result["rdfa"]["types"], ["Organization"])
+        self.assertEqual(evidence.structured_data_markers(result), ["1 Microdata item(s)", "1 typed RDFa resource(s)"])
+        self.assertEqual(evidence.structured_data_markers(evidence.extract('<meta property="og:title" content="x">')), [])
+
+    def test_timestamps_parse_the_same_on_every_python(self):
+        for value in ("2026-09-10T10:00:00Z", "2026-09-10T10:00Z", "2026-09-10 10:00:00.5+02:00", "2026-09-10T10:00:00-0500"):
+            with self.subTest(value=value):
+                evidence.validate_registry([capture(collected_at=value)])
+        for value in ("2026-09-10T10:00:00", "2026-02-30T10:00:00Z", "20260910T100000Z", 5):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                evidence.parse_timestamp(value)
+
 
 if __name__ == "__main__":
     unittest.main()

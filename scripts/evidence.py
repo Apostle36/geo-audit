@@ -2,7 +2,7 @@
 import hashlib
 import json
 import math
-import sys
+import re
 from datetime import datetime
 from html.parser import HTMLParser
 from pathlib import Path
@@ -27,6 +27,28 @@ def strict_json(text):
     return json.loads(text, object_pairs_hook=pairs, parse_constant=constant, parse_float=finite_float)
 
 
+TIMESTAMP = re.compile(r"(\d{4}-\d{2}-\d{2})[Tt ](\d{2}:\d{2})(?::(\d{2})(?:\.(\d+))?)?([Zz]|[+-]\d{2}:?\d{2})")
+
+
+def parse_timestamp(value):
+    """Parse an RFC 3339-style timestamp identically on every supported Python version."""
+    match = TIMESTAMP.fullmatch(value) if isinstance(value, str) else None
+    if not match:
+        raise ValueError("collected_at must be an ISO timestamp with timezone")
+    day, minutes, seconds, fraction, zone = match.groups()
+    text = f"{day}T{minutes}:{seconds or '00'}"
+    if fraction:
+        text += "." + (fraction + "000000")[:6]
+    if zone in "Zz":
+        zone = "+00:00"
+    elif ":" not in zone:
+        zone = zone[:3] + ":" + zone[3:]
+    try:
+        return datetime.fromisoformat(text + zone)
+    except ValueError:
+        raise ValueError("collected_at must be an ISO timestamp with timezone") from None
+
+
 def validate_registry(records):
     """Validate captured text records; hashes prove integrity, not factual truth."""
     if not isinstance(records, list):
@@ -44,12 +66,7 @@ def validate_registry(records):
                 raise ValueError(f"Evidence {key} cannot be empty")
         if record["id"] in registry:
             raise ValueError(f"Duplicate evidence ID: {record['id']}")
-        try:
-            stamp = datetime.fromisoformat(record["collected_at"].replace("Z", "+00:00"))
-            if stamp.utcoffset() is None:
-                raise ValueError()
-        except ValueError:
-            raise ValueError("collected_at must be an ISO timestamp with timezone") from None
+        parse_timestamp(record["collected_at"])
         if record["status"] not in {"success", "failed", "unavailable"}:
             raise ValueError("Invalid collection status")
         if not record["content"].strip():
@@ -78,11 +95,16 @@ def resolve_ids(ids, registry, *, require_success=True):
 class Inventory(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
-        self.result = {"title": "", "titles": [], "descriptions": [], "canonicals": [], "jsonld": [], "errors": [],
-                       "not_checked": ["indexing", "robots", "schema semantics", "microdata", "rdfa", "rendered content"]}
+        self.result = {"title": "", "titles": [], "descriptions": [], "canonicals": [], "jsonld": [],
+                       "microdata": {"items": 0, "types": []}, "rdfa": {"typed": 0, "types": [], "vocabularies": []},
+                       "errors": [],
+                       "not_checked": ["indexing", "robots", "schema semantics", "microdata properties",
+                                       "rdfa properties", "rendered content"]}
         self.in_title = False
         self.in_json = False
         self.buffer = []
+        # <title> inside inline SVG or MathML labels a graphic, not the document.
+        self.foreign_depth = 0
 
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
@@ -93,7 +115,10 @@ class Inventory(HTMLParser):
             if value is None and key in required_values.get(tag, set()):
                 self.result["errors"].append(f"Valueless attribute {key} on {tag} at {self.getpos()}")
         attrs = {key: value or "" for key, value in attrs.items()}
-        if tag == "title":
+        if tag in FOREIGN:
+            self.foreign_depth += 1
+        self.inventory_markup(attrs)
+        if tag == "title" and not self.foreign_depth:
             self.in_title = True
             self.result["titles"].append({"text": "", "line": self.getpos()[0], "column": self.getpos()[1]})
         if tag == "meta" and attrs.get("name", "").lower() == "description":
@@ -104,6 +129,17 @@ class Inventory(HTMLParser):
             self.in_json = True
             self.buffer = []
 
+    def inventory_markup(self, attrs):
+        """Count Microdata items and typed RDFa resources; properties are not parsed."""
+        if "itemscope" in attrs:
+            self.result["microdata"]["items"] += 1
+            add_unique(self.result["microdata"]["types"], attrs.get("itemtype", "").split())
+        # Property-only RDFa, such as Open Graph meta tags, is not counted as typed data.
+        if "typeof" in attrs or "vocab" in attrs:
+            self.result["rdfa"]["typed"] += 1
+            add_unique(self.result["rdfa"]["types"], attrs.get("typeof", "").split())
+            add_unique(self.result["rdfa"]["vocabularies"], attrs.get("vocab", "").split())
+
     def handle_data(self, data):
         if self.in_title:
             self.result["titles"][-1]["text"] += data
@@ -112,6 +148,8 @@ class Inventory(HTMLParser):
             self.buffer.append(data)
 
     def handle_endtag(self, tag):
+        if tag in FOREIGN and self.foreign_depth:
+            self.foreign_depth -= 1
         if tag == "title":
             self.in_title = False
         if tag == "script" and self.in_json:
@@ -124,6 +162,25 @@ class Inventory(HTMLParser):
                 self.result["errors"].append(str(exc))
             self.result["jsonld"].append(block)
             self.in_json = False
+
+
+FOREIGN = {"svg", "math"}
+
+
+def add_unique(target, values):
+    target.extend(value for value in values if value not in target)
+
+
+def structured_data_markers(inventory):
+    """Describe JSON-LD, Microdata or typed RDFa found by extract(); empty when none was seen."""
+    markers = []
+    if inventory["jsonld"]:
+        markers.append(f"{len(inventory['jsonld'])} JSON-LD block(s)")
+    if inventory["microdata"]["items"]:
+        markers.append(f"{inventory['microdata']['items']} Microdata item(s)")
+    if inventory["rdfa"]["typed"]:
+        markers.append(f"{inventory['rdfa']['typed']} typed RDFa resource(s)")
+    return markers
 
 
 def types(value):
@@ -161,6 +218,8 @@ def main():
     parser.add_argument("--method")
     parser.add_argument("--status", choices=["success", "failed", "unavailable"], default="success")
     args = parser.parse_args()
+    if args.record_id and not (args.source and args.collected_at and args.method):
+        parser.error("--record-id requires --source, --collected-at and --method")
     try:
         body = args.file.read_bytes()
         if args.record_id:

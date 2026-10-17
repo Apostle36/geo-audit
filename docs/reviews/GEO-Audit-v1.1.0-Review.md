@@ -3,7 +3,7 @@
 **Verdict: Not ready for unattended client delivery.** Suitable for supervised experimentation with manual review.
 
 **Date:** 2026-09-10
-**Repository:** /home/leo/apps/geo-audit-repo
+**Repository:** ~/apps/geo-audit-repo
 **Baseline/local/remote main:** 013feacbaf5cb063682f15aa0713a4a595e75613
 **Scope:** Skill instructions, six role definitions, all four Python helpers, dependencies, installer, tests, installed copies, and actual synthetic PDF outputs. No production website audit or live AI-visibility measurement was performed.
 
@@ -14,10 +14,10 @@ No source or installed files were modified. Git remained clean before and after 
 ## Baseline and installation state
 
 - Local main and GitHub main match the requested baseline exactly.
-- Both /home/leo/.agents/skills/geo-audit and /home/leo/.claude/skills/geo-audit match all 12 current canonical files: skill, six roles, and five script/dependency files.
+- Both ~/.agents/skills/geo-audit and ~/.claude/skills/geo-audit match all 12 current canonical files: skill, six roles, and five script/dependency files.
 - Neither installed package contains unexpected active files outside backups and bytecode caches.
 - Each package contains one prior SKILL.md under .backups.
-- A separate global Claude role at /home/leo/.claude/agents/geo-technical.md still contains legacy instructions, including the crawler error at line 60. This is distinct from the synchronized bundled copy.
+- A separate global Claude role at ~/.claude/agents/geo-technical.md still contains legacy instructions, including the crawler error at line 60. This is distinct from the synchronized bundled copy.
 - Runtime agent-selection behavior was not exercised in a fresh Claude session. The stale file is confirmed; whether a particular invocation selects it remains unverified.
 - Do not equate backup presence with duplicate skill registration. Current upstream Codex discovery explicitly skips hidden directories; installed runtime parity and Claude discovery were not proved. See [Codex host discovery](https://github.com/openai/codex/blob/main/codex-rs/ext/skills/src/loader/host.rs) and [discovery implementation](https://github.com/openai/codex/blob/main/codex-rs/ext/skills/src/loader/discovery.rs).
 
@@ -196,7 +196,7 @@ Severity is based on demonstrated impact, not exploitability alone. P1 means fix
 ### F11 — P2: legacy global agent definitions can conflict with bundled roles
 
 **Status:** File mismatch confirmed; runtime selection consequence unverified.
-**Locations:** scripts/install.py:23; .claude/skills/geo-audit/SKILL.md:26; /home/leo/.claude/agents/geo-technical.md:60.
+**Locations:** scripts/install.py:23; .claude/skills/geo-audit/SKILL.md:26; ~/.claude/agents/geo-technical.md:60.
 
 **Reproduction:** Compare the synchronized bundled technical role against the global Claude role. The global file still labels GPTBot/ClaudeBot as inference crawlers.
 
