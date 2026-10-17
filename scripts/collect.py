@@ -18,14 +18,17 @@ not run JavaScript, bypass bot challenges or log in, and its private-address
 check cannot prevent DNS rebinding. Outputs never replace existing files.
 """
 import argparse
+import codecs
 from datetime import datetime, timezone
 from functools import lru_cache
 import gzip
 import hashlib
+from html.parser import HTMLParser
 import http.client
 import io
 import ipaddress
 import json
+import math
 from pathlib import Path
 import re
 import socket
@@ -36,6 +39,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urljoin, urlsplit
 import urllib.request
 from xml.etree import ElementTree
+import zlib
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from evidence import validate_registry  # noqa: E402
@@ -101,9 +105,11 @@ def parse_robots(text):
         elif current is not None and key == "crawl-delay":
             current["closed"] = True
             try:
-                current["crawl_delay"] = float(value)
+                delay = float(value)
             except ValueError:
-                pass
+                continue
+            if math.isfinite(delay) and delay >= 0:
+                current["crawl_delay"] = delay
     for group in groups:
         del group["closed"]
     return groups, sitemaps
@@ -203,6 +209,10 @@ class Response:
         name = name.lower()
         return next((value for key, value in self.headers if key.lower() == name), None)
 
+    def header_values(self, name):
+        name = name.lower()
+        return [value for key, value in self.headers if key.lower() == name]
+
     @property
     def location(self):
         value = self.header("location")
@@ -223,6 +233,13 @@ def address_problem(host):
         if not address.is_global:
             return f"{host} resolves to the non-public address {address}"
     return None
+
+
+def response_socket(response):
+    """The socket under an HTTP response, or under the response an HTTPError wraps."""
+    inner = response.fp if isinstance(response, HTTPError) else response
+    reader = getattr(inner, "fp", None)
+    return getattr(getattr(reader, "raw", None), "_sock", None)
 
 
 class Client:
@@ -273,10 +290,21 @@ class Client:
 
     def read(self, response, started):
         chunks, size = [], 0
+        sock = response_socket(response)
         while True:
-            if self.clock() - started > self.timeout:
+            remaining = self.timeout - (self.clock() - started)
+            if remaining <= 0:
                 raise TimeoutError(f"response exceeded {self.timeout} seconds")
-            chunk = response.read(65536)
+            if sock is not None:
+                try:
+                    sock.settimeout(remaining)
+                except OSError:
+                    pass  # Already closed because the body is complete.
+            # read1 returns whatever has arrived, so a slow drip cannot outlast the deadline.
+            try:
+                chunk = response.read1(65536)
+            except TimeoutError:
+                raise TimeoutError(f"response exceeded {self.timeout} seconds") from None
             if not chunk:
                 return b"".join(chunks)
             size += len(chunk)
@@ -305,7 +333,7 @@ class Client:
                 target = response.location
                 continue
             elif 200 <= response.status < 300:
-                text = response.body[:ROBOTS_LIMIT].decode("utf-8", errors="replace")
+                text = response.body[:ROBOTS_LIMIT].decode("utf-8-sig", errors="replace")
                 robots = Robots(target, "parsed", text, response.status, f"HTTP {response.status}")
             elif 300 <= response.status < 500 and response.status != 429:
                 # A 4xx (or a redirect without a target) means no robots.txt applies.
@@ -343,13 +371,27 @@ def decode(response):
         charset = sniffed[1].decode("ascii")
     else:
         charset = "utf-8"
+    if not is_text_encoding(charset):
+        return body.decode("utf-8", errors="replace"), "utf-8", f"Unusable charset {charset}; decoded as UTF-8"
     try:
-        return body.decode(charset), charset, None
-    except LookupError:
-        return body.decode("utf-8", errors="replace"), "utf-8", f"Unknown charset {charset}; decoded as UTF-8"
+        text, note = body.decode(charset), None
     except UnicodeDecodeError:
-        return (body.decode(charset, errors="replace"), charset,
-                f"Some bytes were invalid {charset} and were replaced with U+FFFD")
+        text, note = body.decode(charset, errors="replace"), \
+            f"Some bytes were invalid {charset} and were replaced with U+FFFD"
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:  # For example lone surrogates from UTF-7.
+        return body.decode("utf-8", errors="replace"), "utf-8", f"{charset} produced invalid text; decoded as UTF-8"
+    return text, charset, note
+
+
+def is_text_encoding(name):
+    """Real character encodings only: not escape codecs or bytes-to-bytes transforms."""
+    try:
+        info = codecs.lookup(name)
+    except LookupError:
+        return False
+    return getattr(info, "_is_text_encoding", True) and "escape" not in info.name
 
 
 def visible_text(html):
@@ -360,26 +402,25 @@ def visible_text(html):
 CHALLENGE_TITLE = re.compile(r"\b(client challenge|just a moment|attention required|access denied|security check|"
                              r"checking your browser|are you a robot|bot verification|human verification|"
                              r"ddos protection)\b")
-# Interstitial wording and vendor signatures (Cloudflare, Fastly, Akamai, Imperva, DataDome, PerimeterX).
+# Interstitial wording and vendor signatures (Cloudflare, Fastly, Imperva, DataDome, PerimeterX). Cloudflare
+# also injects /cdn-cgi/challenge-platform/ scripts into healthy pages, so that path is deliberately absent.
 CHALLENGE_MARKERS = ("enable javascript to proceed", "enable javascript and cookies to continue",
-                     "verify you are human", "cf-chl", "challenge-platform", "/cdn-cgi/challenge", "/_fs-ch-",
-                     "_incapsula_resource", "captcha-delivery.com", "px-captcha")
+                     "verify you are human", "cf-chl", "_cf_chl_opt", "/_fs-ch-", "_incapsula_resource",
+                     "captcha-delivery.com", "px-captcha")
+# Directives that carry a value after a colon, unlike a "googlebot:" style agent prefix.
+VALUED_DIRECTIVES = {"max-snippet", "max-image-preview", "max-video-preview", "unavailable_after"}
 
 
 def flags(response, text):
     """Heuristic prompts for human review, never conclusions."""
     found = []
-    robots_header = (response.header("x-robots-tag") or "").lower()
-    directives = {part.strip() for part in re.split(r"[,:]", robots_header)}
-    if directives & {"noindex", "none"}:
+    if blocks_indexing(",".join(response.header_values("x-robots-tag"))):
         found.append("noindex_header")
     if text is None:
         return found
     head = text[:200_000]
-    for tag in re.findall(r"(?is)<meta\b[^>]*>", head):
-        if re.search(r"name=[\"']?(robots|googlebot)\b", tag, re.I) and re.search(r"noindex|\bnone\b", tag, re.I):
-            found.append("noindex_meta")
-            break
+    if any(blocks_indexing(content) for content in robots_meta(head)):
+        found.append("noindex_meta")
     title = re.search(r"(?is)<title[^>]*>(.*?)</title>", head)
     title = " ".join(title[1].split()).lower() if title else ""
     lower = head.lower()
@@ -392,6 +433,36 @@ def flags(response, text):
         if len(visible_text(head)) < 200:
             found.append("thin_response")
     return found
+
+
+def blocks_indexing(value):
+    """True when a robots directive list contains noindex or none, optionally after an agent prefix."""
+    for part in value.lower().split(","):
+        part = part.strip()
+        name, colon, rest = part.partition(":")
+        if colon and name.strip() not in VALUED_DIRECTIVES:
+            part = rest.strip()  # "googlebot: noindex"
+        if part in {"noindex", "none"}:
+            return True
+    return False
+
+
+class RobotsMeta(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.contents = []
+
+    def handle_starttag(self, tag, attrs):
+        attrs = {key: value or "" for key, value in attrs}
+        if tag == "meta" and attrs.get("name", "").strip().lower() in {"robots", "googlebot", "bingbot"}:
+            self.contents.append(attrs.get("content", ""))
+
+
+def robots_meta(html):
+    parser = RobotsMeta()
+    parser.feed(html)
+    parser.close()
+    return parser.contents
 
 
 def header_line(key, value):
@@ -453,11 +524,16 @@ def follow(client, url, scope, allowed=None):
     return chain, notes, None
 
 
-def robots_record(client, url):
+def robots_id(prefix, url):
+    """For example page-robots-www.example.com; dots and ports are kept so hosts never collide."""
+    parts = urlsplit(url)
+    host = re.sub(r"[^a-z0-9.:-]+", "-", parts.netloc.lower())
+    return f"{prefix}-robots-{host}" if parts.scheme == "https" else f"{prefix}-robots-{parts.scheme}-{host}"
+
+
+def robots_record(client, url, prefix):
     robots, chain = client.robots(url)
-    origin = urlsplit(robots.url)
-    slug = re.sub(r"[^a-z0-9]+", "-", origin.netloc.lower()).strip("-")
-    identifier = f"robots-{slug}" if origin.scheme == "https" else f"robots-{origin.scheme}-{slug}"
+    identifier = robots_id(prefix, url)
     if chain and not chain[-1].error:
         text, _, note = decode(chain[-1])
         if text is not None:
@@ -479,9 +555,7 @@ def capture_page(client, identifier, url, raw_dir):
         reason = refusal or f"disallowed by robots.txt for {TOKEN} ({log['robots_for_collector']['rule'] or robots.state})"
         log.update(status="unavailable", notes=[reason])
         return record(identifier, url, now(), f"Request: GET {url}\nNot fetched: {reason}", "unavailable"), log
-    def allowed(target):
-        return robots_for(client, target).decision(TOKEN, target)["allowed"]
-    chain, notes, error = follow(client, url, host_twins(url), allowed)
+    chain, notes, error = follow(client, url, host_twins(url), allowed_for(client))
     if error:
         hops = "".join(f"\nRedirect: {hop.status} {hop.url} -> {hop.location}" for hop in chain)
         log.update(status="failed", notes=[error], redirects=[hop.url for hop in chain])
@@ -538,12 +612,14 @@ def parse_sitemap(text):
     return ("index" if local == "sitemapindex" else "urlset"), entries
 
 
-def discover(client, origin, *, agents=REPORT_AGENTS, max_sitemaps=MAX_SITEMAPS, max_urls=MAX_SITEMAP_URLS):
+def discover(client, origin, *, agents=REPORT_AGENTS, max_sitemaps=MAX_SITEMAPS, max_urls=MAX_SITEMAP_URLS,
+             id_prefix="discovery"):
     """Robots, sitemaps and candidate pages for one origin. Returns (summary, evidence records)."""
-    robots, robots_evidence = robots_record(client, origin)
+    robots, robots_evidence = robots_record(client, origin, id_prefix)
     evidence, notes = [robots_evidence], []
     scope = host_twins(origin)
-    queue = list(dict.fromkeys(robots.sitemaps))
+    # The sitemap protocol wants absolute URLs; relative ones are resolved against robots.txt.
+    queue = list(dict.fromkeys(urljoin(robots.url, item) for item in robots.sitemaps))
     if not queue:
         queue = [urljoin(origin, "/sitemap.xml")]
         notes.append("robots.txt declares no sitemap; tried the conventional /sitemap.xml")
@@ -560,8 +636,8 @@ def discover(client, origin, *, agents=REPORT_AGENTS, max_sitemaps=MAX_SITEMAPS,
         if refusal:
             entry["error"] = refusal
             continue
-        identifier = f"sitemap-{len(sitemaps):02d}"
-        chain, follow_notes, error = follow(client, url, host_twins(url) | scope)
+        identifier = f"{id_prefix}-sitemap-{len(sitemaps):02d}"
+        chain, follow_notes, error = follow(client, url, host_twins(url) | scope, allowed_for(client))
         if error:
             entry["error"] = error
             evidence.append(record(identifier, url, now(), f"Request: GET {url}\nCollection failed: {error}", "failed"))
@@ -574,7 +650,7 @@ def discover(client, origin, *, agents=REPORT_AGENTS, max_sitemaps=MAX_SITEMAPS,
         try:
             text = sitemap_text(chain[-1])
             kind, entries = parse_sitemap(text)
-        except (ValueError, OSError, ElementTree.ParseError) as error:
+        except (ValueError, OSError, EOFError, zlib.error, ElementTree.ParseError) as error:
             entry["error"] = f"{type(error).__name__}: {error}"
             text, kind, entries = None, None, []
         entry.update(kind=kind, entries=len(entries))
@@ -600,14 +676,22 @@ def discover(client, origin, *, agents=REPORT_AGENTS, max_sitemaps=MAX_SITEMAPS,
     elif queue:
         truncated = True
         notes.append(f"Stopped after {max_sitemaps} sitemaps; {len(queue)} more were not fetched")
+    by_origin = {}
+    for url in candidates:
+        parts = urlsplit(url)
+        by_origin.setdefault(f"{parts.scheme}://{parts.netloc.lower()}", []).append(url)
+    origin_robots = {key: robots_for(client, key + "/") for key in by_origin}
     report, blocked_by_rules = {}, {}
     for agent in agents:
-        groups = robots.groups_for(agent)
-        # Agents that fall back to the same groups share one pass over the candidates.
-        key = tuple(id(group) for group in groups)
-        if key not in blocked_by_rules:
-            blocked_by_rules[key] = [url for url in candidates if not robots.decide(groups, agent, url)["allowed"]]
-        blocked = blocked_by_rules[key]
+        blocked = []
+        for key, urls in by_origin.items():
+            rules = origin_robots[key]
+            groups = rules.groups_for(agent)
+            # Agents that fall back to the same groups share one pass over the candidates.
+            cache = (key, tuple(id(group) for group in groups))
+            if cache not in blocked_by_rules:
+                blocked_by_rules[cache] = [url for url in urls if not rules.decide(groups, agent, url)["allowed"]]
+            blocked += blocked_by_rules[cache]
         report[agent] = {"homepage": robots.decision(agent, urljoin(origin, "/")),
                          "disallowed_candidates": len(blocked), "examples": blocked[:5]}
     summary = {"origin": origin, "collected_at": now(), "collector": USER_AGENT, "robots": robots.summary(),
@@ -621,6 +705,11 @@ def robots_for(client, url):
     return client.robots(url)[0]
 
 
+def allowed_for(client):
+    """Robots check for redirect targets, under each target's own origin."""
+    return lambda target: robots_for(client, target).decision(TOKEN, target)["allowed"]
+
+
 def fetch(client, urls, raw_dir, *, agents=REPORT_AGENTS, id_prefix="page"):
     """Capture each URL once. Returns (evidence records, log)."""
     problems = check_urls(urls)
@@ -628,11 +717,17 @@ def fetch(client, urls, raw_dir, *, agents=REPORT_AGENTS, id_prefix="page"):
         raise ValueError("; ".join(problems))
     evidence, entries, robots_ids = [], [], set()
     for index, url in enumerate(urls, 1):
-        robots, robots_evidence = robots_record(client, url)
+        robots, robots_evidence = robots_record(client, url, id_prefix)
         if robots_evidence["id"] not in robots_ids:
             robots_ids.add(robots_evidence["id"])
             evidence.append(robots_evidence)
-        page, entry = capture_page(client, f"{id_prefix}-{index:02d}", url, raw_dir)
+        identifier = f"{id_prefix}-{index:02d}"
+        try:
+            page, entry = capture_page(client, identifier, url, raw_dir)
+        except Exception as error:  # One hostile response must not discard the rest of the batch.
+            reason = f"{type(error).__name__}: {error}"
+            page = record(identifier, url, now(), f"Request: GET {url}\nCollection failed: {reason}", "failed")
+            entry = {"id": identifier, "url": url, "status": "failed", "notes": [reason]}
         entry["robots_reported"] = {agent: robots.decision(agent, url) for agent in agents}
         evidence.append(page)
         entries.append(entry)

@@ -62,7 +62,8 @@ def _temporary(directory):
     for _ in range(100):
         name = directory / f".geo-output-{secrets.token_hex(8)}"
         try:
-            return os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666), name
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+            return os.open(name, flags, 0o666), name
         except FileExistsError:
             continue
     raise FileExistsError("Could not create a unique temporary output")
