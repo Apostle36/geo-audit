@@ -156,12 +156,15 @@ sample URL, so a redirected page still covers its sample entry.
 - `success`: a response was received, whatever its HTTP status. A 404 or an
   unfollowed off-site redirect is a successful observation of that response.
 - `failed`: a request was attempted but produced no usable response (network
-  error, timeout, or a body over the size limit).
+  error, a body over the size limit, or a body still arriving 30 seconds after
+  the request started), or the response could not be processed.
 - `unavailable`: the collector chose not to request it (disallowed by robots.txt
   for its own token, or a private address).
 
-Robots captures use IDs such as `robots-www-example-com`; sitemap captures use
-`sitemap-01` onwards. The raw body of every page is saved as
+IDs carry the batch prefix, so discovery and any number of fetch batches merge
+without collisions: `fetch` writes `page-01` onwards and
+`page-robots-www.example.com` (change `page` with `--id-prefix`); `discover`
+writes `discovery-robots-www.example.com` and `discovery-sitemap-01` onwards. The raw body of every page is saved as
 `evidence/raw/<sha256>.bin`, and `fetch-log.json` records redirects, decoding,
 the robots decision for each reported crawler token and review flags
 (`possible_soft_404`, `possible_challenge`, `thin_response`, `noindex_meta`,

@@ -18,7 +18,10 @@ collect = module('collect', 'collect.py')
 
 @contextmanager
 def serve(routes):
-    """Serve {path: (status, headers, body)} on 127.0.0.1; unknown paths return 404."""
+    """Serve {path: (status, headers, body)} on 127.0.0.1; unknown paths return 404.
+
+    A callable body writes its own response (for slow streams) and declares its own length.
+    """
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             self.server.requests.append((self.path, self.headers.get('User-Agent')))
@@ -27,10 +30,14 @@ def serve(routes):
             for key, value in headers.items():
                 if key != 'X-Stream':
                     self.send_header(key, value)
-            if 'X-Stream' not in headers:  # Streamed bodies end when the HTTP/1.0 connection closes.
+            if 'X-Stream' not in headers and not callable(body):
+                # Streamed bodies end when the HTTP/1.0 connection closes.
                 self.send_header('Content-Length', str(len(body)))
             self.end_headers()
-            self.wfile.write(body)
+            try:
+                body(self.wfile) if callable(body) else self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # The collector gave up, as intended.
 
         def log_message(self, *args):
             pass
@@ -149,6 +156,36 @@ class RobotsRules(unittest.TestCase):
         self.assertEqual(self.robots('User-agent: *\nCrawl-delay: 4\n').crawl_delay('GEO-Audit'), 4)
         self.assertEqual(self.robots('User-agent: *\nCrawl-delay: 900\n').crawl_delay('GEO-Audit'), 30)
 
+    def test_robots_ids_never_collide_between_hosts(self):
+        self.assertNotEqual(collect.robots_id('page', 'https://a-b.com/'), collect.robots_id('page', 'https://a.b.com/'))
+        self.assertEqual(collect.robots_id('discovery', 'https://www.example.com/x'), 'discovery-robots-www.example.com')
+
+    def test_non_finite_crawl_delays_are_ignored(self):
+        for value in ('inf', 'nan', '1e999', '-3'):
+            with self.subTest(value=value):
+                robots = self.robots(f'User-agent: *\nCrawl-delay: {value}\nDisallow: /x\n')
+                self.assertEqual(robots.crawl_delay('GEO-Audit'), 0)
+                json.dumps(robots.summary(), allow_nan=False)
+
+    def test_noindex_flags_read_whole_directives(self):
+        def flags(headers=(), meta=''):
+            response = collect.Response('https://example.com/', 200, 'OK', list(headers))
+            return collect.flags(response, f'<html><head><title>T</title>{meta}</head><body>{PROSE}</body></html>')
+        self.assertEqual(flags([('X-Robots-Tag', 'max-image-preview:none')]), [])
+        self.assertEqual(flags(meta='<meta name="robots" content="index, follow, max-image-preview:none">'), [])
+        self.assertEqual(flags([('X-Robots-Tag', 'noarchive'), ('X-Robots-Tag', 'noindex')]), ['noindex_header'])
+        self.assertEqual(flags([('X-Robots-Tag', 'googlebot: noindex, nofollow')]), ['noindex_header'])
+        self.assertEqual(flags(meta='<meta name="ROBOTS" content="NONE">'), ['noindex_meta'])
+        self.assertEqual(flags(meta='<meta name="description" content="noindex">'), [])
+
+    def test_healthy_cloudflare_pages_are_not_challenges(self):
+        response = collect.Response('https://example.com/', 200, 'OK', [])
+        page = (f'<html><head><title>Home</title></head><body>{PROSE}<script>window.__CF$cv$params={{r:"1"}};'
+                's.src="/cdn-cgi/challenge-platform/scripts/jsd/main.js";</script></body></html>')
+        self.assertEqual(collect.flags(response, page), [])
+        challenge = '<title>Just a moment...</title><script>window._cf_chl_opt={cZone:"x"}</script>'
+        self.assertEqual(collect.flags(collect.Response('u', 403, 'Forbidden', []), challenge), ['possible_challenge'])
+
     def test_url_checks(self):
         self.assertEqual(collect.check_urls(['https://example.com/']), [])
         for urls in ([], ['https://example.com/#top'], ['ftp://example.com/'], ['https://example.com/'] * 2,
@@ -187,7 +224,7 @@ class Collection(unittest.TestCase):
         validate_registry(evidence)
         pages = {entry['url'][len(base):]: entry for entry in log['pages']}
         records = {record['source'][len(base):]: record for record in evidence}
-        self.assertEqual(evidence[0]['id'], 'robots-http-127-0-0-1-' + base.rsplit(':', 1)[1])
+        self.assertEqual(evidence[0]['id'], 'page-robots-http-' + base.split('//')[1])
         self.assertEqual(requested.count('/robots.txt'), 1)
         self.assertNotIn('/private/x', requested)
         self.assertEqual(agents, {collect.USER_AGENT})
@@ -232,6 +269,67 @@ class Collection(unittest.TestCase):
             with self.subTest(status=status), serve(routes) as (base, _), tempfile.TemporaryDirectory() as directory:
                 _, log = collect.fetch(client(), [base + '/a'], Path(directory))
                 self.assertEqual(log['pages'][0]['status'], expected)
+
+    def test_robots_byte_order_mark_does_not_hide_rules(self):
+        routes = dict(site('http://unused'))
+        routes['/robots.txt'] = (200, {'Content-Type': 'text/plain'}, b'\xef\xbb\xbfUser-agent: *\r\nDisallow: /private\r\n')
+        with serve(routes) as (base, server), tempfile.TemporaryDirectory() as directory:
+            _, log = collect.fetch(client(), [base + '/private/x'], Path(directory))
+            self.assertNotIn('/private/x', [path for path, _ in server.requests])
+        self.assertEqual(log['pages'][0]['status'], 'unavailable')
+
+    def test_slow_drip_cannot_outlast_the_deadline(self):
+        import time
+        def drip(stream):
+            for _ in range(60):
+                stream.write(b'x')
+                stream.flush()
+                time.sleep(0.1)
+        routes = {'/robots.txt': (404, {}, b''), '/slow': (200, {'Content-Type': 'text/html', 'Content-Length': '1000'}, drip)}
+        with serve(routes) as (base, _), tempfile.TemporaryDirectory() as directory:
+            started = time.monotonic()
+            _, log = collect.fetch(client(timeout=1), [base + '/slow'], Path(directory))
+            elapsed = time.monotonic() - started
+        self.assertEqual(log['pages'][0]['status'], 'failed')
+        self.assertIn('exceeded 1 seconds', log['pages'][0]['notes'][0])
+        self.assertLess(elapsed, 3)
+
+    def test_hostile_charset_and_unexpected_errors_stay_per_page(self):
+        routes = dict(site('http://unused'))
+        routes['/escape'] = (200, {'Content-Type': 'text/html; charset=unicode_escape'}, b'<title>\\ud800</title>')
+        with serve(routes) as (base, _), tempfile.TemporaryDirectory() as directory:
+            evidence, log = collect.fetch(client(), [base + '/escape', base + '/a'], Path(directory))
+            validate_registry(evidence)
+            self.assertEqual([page['status'] for page in log['pages']], ['success', 'success'])
+            self.assertIn('Unusable charset unicode_escape', evidence[1]['content'])
+            original = collect.capture_page
+            def explode(client_, identifier, url, raw_dir):
+                if url.endswith('/escape'):
+                    raise RuntimeError('simulated parser failure')
+                return original(client_, identifier, url, raw_dir)
+            collect.capture_page = explode
+            try:
+                evidence, log = collect.fetch(client(), [base + '/escape', base + '/a'], Path(directory))
+            finally:
+                collect.capture_page = original
+        self.assertEqual([page['status'] for page in log['pages']], ['failed', 'success'])
+        self.assertIn('simulated parser failure', evidence[1]['content'])
+
+    def test_sitemap_problems_are_recorded_not_fatal(self):
+        routes = dict(site('http://unused'))
+        routes['/robots.txt'] = (200, {}, b'User-agent: *\nDisallow: /private\nSitemap: /broken.xml.gz\nSitemap: /moved.xml\n')
+        routes['/broken.xml.gz'] = (200, {'Content-Type': 'application/gzip'}, gzip.compress(b'<urlset>' * 200)[:40])
+        routes['/moved.xml'] = (301, {'Location': '/private/sitemap.xml'}, b'')
+        routes['/private/sitemap.xml'] = (200, {}, b'<urlset><url><loc>http://x/</loc></url></urlset>')
+        with serve(routes) as (base, server):
+            # The relative Sitemap lines also check resolution against robots.txt.
+            summary, evidence = collect.discover(client(), base + '/')
+            requested = [path for path, _ in server.requests]
+        validate_registry(evidence)
+        errors = {item['url'][len(base):]: item.get('error', '') for item in summary['sitemaps']}
+        self.assertIn('EOFError', errors['/broken.xml.gz'])
+        self.assertIn('disallowed by robots.txt', errors['/moved.xml'])
+        self.assertNotIn('/private/sitemap.xml', requested)
 
     def test_requests_to_a_host_are_spaced(self):
         moments, waits = [0.0], []
@@ -285,11 +383,18 @@ class CommandLine(unittest.TestCase):
             self.assertEqual(again.returncode, 2)
             self.assertIn('already exists', again.stderr)
             self.assertNotIn('Traceback', again.stderr)
+            second = Path(directory) / 'second-batch'
+            fetched = self.run_script('collect.py', 'fetch', second, base + '/redirect', '--allow-private',
+                                      '--id-prefix', 'extra')
+            self.assertEqual(fetched.returncode, 0, fetched.stderr)
             run_path = Path(directory) / 'run.json'
+            # The documented workflow merges discovery and every fetch batch.
             created = self.run_script('new_run.py', run_path, '--url', base + '/', '--sample', base + '/',
                                       '--sample', base + '/a', '--business-type', 'Test', '--market', 'Test',
                                       '--language', 'en', '--sampling-rationale', 'Test',
-                                      '--evidence', out / 'fetch-evidence.json')
+                                      '--evidence', out / 'fetch-evidence.json',
+                                      '--evidence', out / 'discovery-evidence.json',
+                                      '--evidence', second / 'fetch-evidence.json')
             self.assertEqual(created.returncode, 0, created.stderr)
             self.assertIn(f'No successful capture yet for sample URL {base}/a', created.stdout)
             checked = self.run_script('run_contract.py', run_path)
