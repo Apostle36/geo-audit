@@ -15,6 +15,9 @@ Branding (optional env vars):
   GEO_AUDIT_AUTHOR   Your name  (default: "GEO Audit")
   GEO_AUDIT_DOMAIN   Your domain (default: "")
 
+Browser: PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH if set, otherwise Playwright's own
+Chromium, otherwise an installed system Chrome/Chromium as a fallback.
+
   Example:
     GEO_AUDIT_AUTHOR="Jane Smith" GEO_AUDIT_DOMAIN="janesmith.com" python3 scripts/geo-audit-pdf.py
 
@@ -39,6 +42,10 @@ DOMAIN = os.environ.get("GEO_AUDIT_DOMAIN", "")
 # A4 at 96 dpi
 A4_W = 794
 A4_H = 1123
+
+# A PDF of raw captures stops being readable long before the collection limits are
+# reached, so each capture is shortened there. Technical HTML keeps every character.
+TECHNICAL_PDF_EVIDENCE_CHARACTERS = 5000
 
 
 # ---------------------------------------------------------------------------
@@ -249,10 +256,12 @@ def parse_report(text: str) -> dict:
 # HTML generation
 # ---------------------------------------------------------------------------
 
-def generate_html(data: dict) -> str:
+def generate_html(data: dict, content_lang=None) -> str:
     if data.get("client_report"):
         from client_report import render_client_html
-        return render_client_html(data, AUTHOR, DOMAIN)
+        return render_client_html(data, AUTHOR, DOMAIN, content_lang)
+    if content_lang is not None:
+        raise ValueError("--content-lang applies to client reports only")
     score = data["overall_score"]
     color = score_color(score) if score is not None else "#71717A"
     score = score if score is not None else "—"
@@ -270,9 +279,13 @@ def generate_html(data: dict) -> str:
             return render_blocks(text)
         return '<div class="plain-text">' + html_lib.escape(text) + '</div>' if format == "plain" else md_to_html(text)
 
+    def heading(section):
+        # Structured runs supply plain headings (for example finding IDs); only legacy Markdown is parsed.
+        return html_lib.escape(section["heading"]) if section.get("format") == "plain" else inline_md(section["heading"])
+
     sections_html = "".join(
         f'<section class="report-section">'
-        f'<h2>{inline_md(s["heading"])}</h2>'
+        f'<h2>{heading(s)}</h2>'
         f'<div class="section-body">{body(s["content"], s.get("format", "markdown"))}</div>'
         f'</section>'
         for s in data["sections"]
@@ -294,7 +307,7 @@ def generate_html(data: dict) -> str:
         f'<div class="score-ring"><div class="score-num">{score}</div><div class="score-denom">/100</div><div class="score-label">{data["score_label"]}</div></div>')
 
     return f"""<!DOCTYPE html>
-<html lang="en">
+<html lang="en-GB">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -784,25 +797,42 @@ def generate_html(data: dict) -> str:
 # PDF rendering
 # ---------------------------------------------------------------------------
 
-SYSTEM_CHROME = "/usr/bin/google-chrome"
+SYSTEM_BROWSERS = ("/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser")
+
+
+def launch_chromium(playwright):
+    """Explicit executable first, then Playwright's tested Chromium, then a system browser.
+
+    Playwright pins the Chromium build it is tested against, so a system browser is
+    used only when that build is not installed.
+    """
+    import shutil
+    from playwright.sync_api import Error
+    options = {"args": ["--disable-dev-shm-usage"]}
+    explicit = os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH")
+    if explicit:
+        return playwright.chromium.launch(executable_path=explicit, **options)
+    try:
+        return playwright.chromium.launch(**options)
+    except Error as exc:
+        if "Executable doesn't exist" not in str(exc):
+            raise
+        for candidate in SYSTEM_BROWSERS:
+            if shutil.which(candidate):
+                print(f"Playwright's Chromium is not installed; using {candidate}", file=sys.stderr)
+                return playwright.chromium.launch(executable_path=candidate, **options)
+        raise
 
 
 def render_to_pdf(html_path: Path) -> bytes:
     """Render the HTML to a text-based A4 PDF using Playwright's native export."""
-    import shutil
     try:
         from playwright.sync_api import sync_playwright
     except ImportError as exc:
         raise RuntimeError("Install playwright and run: playwright install chromium") from exc
-    exe = os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or (
-        SYSTEM_CHROME if shutil.which(SYSTEM_CHROME) else None
-    )
-    launch_kwargs = {"args": ["--disable-dev-shm-usage"]}
-    if exe:
-        launch_kwargs["executable_path"] = exe
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(**launch_kwargs)
+        browser = launch_chromium(p)
         page = browser.new_page()
         page.set_viewport_size({"width": A4_W, "height": A4_H})
         page.route("http://**/*", lambda route: route.abort())
@@ -826,7 +856,8 @@ def render_to_pdf(html_path: Path) -> bytes:
 # Entry point
 # ---------------------------------------------------------------------------
 
-def export_report(report_path, output_path, *, overwrite=False, legacy_markdown=False, technical=False):
+def export_report(report_path, output_path, *, overwrite=False, legacy_markdown=False, technical=False,
+                  content_lang=None):
     from evidence import strict_json
     from run_contract import report_data
     from safe_io import check_output, atomic_write
@@ -837,8 +868,13 @@ def export_report(report_path, output_path, *, overwrite=False, legacy_markdown=
     text = report_path.read_text(encoding="utf-8")
     if technical and legacy_markdown:
         raise ValueError('--technical requires a validated JSON run')
-    data = parse_report(text) if legacy_markdown else report_data(strict_json(text), technical=technical)
-    html = generate_html(data)
+    pdf = output_path.suffix.lower() == ".pdf"
+    if legacy_markdown:
+        data = parse_report(text)
+    else:
+        limit = TECHNICAL_PDF_EVIDENCE_CHARACTERS if technical and pdf else None
+        data = report_data(strict_json(text), technical=technical, evidence_limit=limit)
+    html = generate_html(data, content_lang)
     if output_path.suffix.lower() == ".html":
         atomic_write(report_path, output_path, html.encode("utf-8"), overwrite)
         return
@@ -858,10 +894,12 @@ def main() -> None:
     parser.add_argument("output", type=Path)
     parser.add_argument("--overwrite", action="store_true", help="Explicitly replace an existing output, never the input")
     parser.add_argument("--legacy-markdown", action="store_true", help="Import unverified legacy Markdown with a visible warning")
-    parser.add_argument('--technical', action='store_true', help='Export internal criteria and full captured evidence instead of the client report')
+    parser.add_argument('--technical', action='store_true', help='Export internal criteria and captured evidence instead of the client report (PDF shortens each capture; HTML keeps it whole)')
+    parser.add_argument('--content-lang', help='BCP 47 language of the run-written prose, such as el, when it is not English')
     args = parser.parse_args()
     try:
-        export_report(args.report, args.output, overwrite=args.overwrite, legacy_markdown=args.legacy_markdown, technical=args.technical)
+        export_report(args.report, args.output, overwrite=args.overwrite, legacy_markdown=args.legacy_markdown,
+                      technical=args.technical, content_lang=args.content_lang)
     except Exception as exc:
         parser.exit(2, f"Report failed: {exc}\n")
     print(f"Saved {args.output}")

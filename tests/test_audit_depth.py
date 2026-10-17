@@ -124,7 +124,7 @@ class AuditDepth(unittest.TestCase):
 
     def test_scope_is_declared_not_claimed_as_observed(self):
         html = pdf.generate_html(report_data(detailed_run()))
-        self.assertIn('Declared sample: 1 pages', html)
+        self.assertIn('Declared sample: 1 page.', html)
         self.assertNotIn('Pages Analyzed', html)
         self.assertNotIn('Conclusions apply only to the listed subset', html)
         self.assertNotIn('Scope: 1 of 1', html)

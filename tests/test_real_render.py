@@ -55,7 +55,7 @@ class RealRender(unittest.TestCase):
         # Verify browser layout, not merely the presence of CSS declarations.
         from playwright.sync_api import sync_playwright
         with sync_playwright() as runtime:
-            browser = runtime.chromium.launch(executable_path=os.environ.get('PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH', pdf.SYSTEM_CHROME))
+            browser = pdf.launch_chromium(runtime)
             page = browser.new_page(viewport={'width': pdf.A4_W, 'height': pdf.A4_H})
             page.goto(long_html.as_uri())
             overflows = page.locator('table, th, td').evaluate_all('(nodes) => nodes.map(n => n.getBoundingClientRect()).filter(r => r.right > 795 || r.left < -1).map(r => ({left:r.left,right:r.right}))')
@@ -89,7 +89,7 @@ class RealRender(unittest.TestCase):
         self.assertIn('UNIQUE_DEEP_REVIEW', self.text(target))
         self.assertNotIn('page-1', self.text(target))
         with sync_playwright() as runtime:
-            browser = runtime.chromium.launch(executable_path=os.environ.get('PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH', pdf.SYSTEM_CHROME))
+            browser = pdf.launch_chromium(runtime)
             page = browser.new_page(viewport={'width': 390, 'height': 844})
             page.goto(html.as_uri())
             self.assertTrue(page.evaluate('document.documentElement.scrollWidth <= window.innerWidth'))

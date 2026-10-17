@@ -1,4 +1,5 @@
 import builtins
+import importlib.util
 from concurrent.futures import ThreadPoolExecutor
 import json
 import os
@@ -49,6 +50,54 @@ class ReportingContract(unittest.TestCase):
             return original(name, *args, **kwargs)
         with patch('builtins.__import__', unavailable), self.assertRaisesRegex(RuntimeError, 'playwright'):
             pdf.render_to_pdf(Path('/nonexistent/test.html'))
+
+    @unittest.skipUnless(importlib.util.find_spec('playwright'), 'Playwright is not installed')
+    def test_system_browser_is_only_a_fallback(self):
+        from playwright.sync_api import Error
+        calls = []
+        class Chromium:
+            def __init__(self, bundled):
+                self.bundled = bundled
+            def launch(self, **options):
+                calls.append(options.get('executable_path'))
+                if 'executable_path' not in options and not self.bundled:
+                    raise Error("BrowserType.launch: Executable doesn't exist at /missing")
+                return 'browser'
+        class Runtime:
+            def __init__(self, bundled):
+                self.chromium = Chromium(bundled)
+        environment = {k: v for k, v in os.environ.items() if k != 'PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH'}
+        with patch.dict('os.environ', environment, clear=True), patch('shutil.which', return_value='/usr/bin/google-chrome'):
+            self.assertEqual(pdf.launch_chromium(Runtime(bundled=True)), 'browser')
+            self.assertEqual(calls, [None])
+            calls.clear()
+            with patch('sys.stderr'):
+                pdf.launch_chromium(Runtime(bundled=False))
+            self.assertEqual(calls, [None, '/usr/bin/google-chrome'])
+            calls.clear()
+            with patch.dict('os.environ', {'PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH': '/opt/chrome'}):
+                pdf.launch_chromium(Runtime(bundled=False))
+            self.assertEqual(calls, ['/opt/chrome'])
+
+    def test_technical_pdf_shortens_captures_but_html_does_not(self):
+        import hashlib
+        run = run_fixture()
+        record = run['assessment']['evidence'][0]
+        record['content'] = 'x' * (pdf.TECHNICAL_PDF_EVIDENCE_CHARACTERS + 10) + 'END_OF_CAPTURE'
+        record['sha256'] = hashlib.sha256(record['content'].encode()).hexdigest()
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / 'input.json'
+            source.write_text(json.dumps(run))
+            pdf.export_report(source, Path(directory) / 'evidence.html', technical=True)
+            self.assertIn('END_OF_CAPTURE', (Path(directory) / 'evidence.html').read_text())
+            captured = []
+            def render(path):
+                captured.append(path.read_text())
+                return b'%PDF-1.7'
+            with patch.object(pdf, 'render_to_pdf', render):
+                pdf.export_report(source, Path(directory) / 'evidence.pdf', technical=True)
+            self.assertNotIn('END_OF_CAPTURE', captured[0])
+            self.assertIn('Shortened for this export', captured[0])
 
     def test_conflicting_scores_rejected(self):
         for extra in ('50/100', '90/100', 'Not assessed'):
@@ -139,6 +188,17 @@ class ReportingContract(unittest.TestCase):
                 self.assertEqual(sum(pool.map(publish, [b'a', b'b'])), 1)
             self.assertIn(output.read_bytes(), [b'a', b'b'])
             self.assertEqual(list(Path(directory).glob('.geo-output-*')), [])
+
+    def test_outputs_follow_umask_not_private_temp_mode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source, output = Path(directory) / 'input.json', Path(directory) / 'report.html'
+            source.write_text(json.dumps(run_fixture()))
+            previous = os.umask(0o022)
+            try:
+                pdf.export_report(source, output)
+            finally:
+                os.umask(previous)
+            self.assertEqual(output.stat().st_mode & 0o777, 0o644)
 
     def test_structured_text_cannot_inject_markup(self):
         from run_contract import report_data

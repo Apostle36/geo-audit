@@ -1,7 +1,6 @@
 from pathlib import Path
 import json
 import hashlib
-import shutil
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -68,6 +67,24 @@ class InstallContract(unittest.TestCase):
             result = installer.install(parent)
             self.assertIn(str(role), result['different_global_roles'])
             self.assertEqual(role.read_text(), 'legacy role')
+
+    def test_old_backups_are_pruned_and_version_reported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory) / 'skills'
+            for index in range(5):
+                if index:
+                    (parent / 'geo-audit/SKILL.md').write_text(f'customisation {index}')
+                result = installer.install(parent, keep_backups=2)
+            backups = sorted((parent / 'geo-audit/.backups').iterdir())
+            self.assertEqual(len(backups), 2)
+            self.assertEqual(result['pruned_backups'], 1)
+            self.assertEqual((backups[-1] / 'SKILL.md').read_text(), 'customisation 4')
+            version = (ROOT / 'scripts/version.py').read_text().split('TOOLKIT_VERSION = "')[1].split('"')[0]
+            self.assertEqual(result['version'], version)
+            for script in ('collect.py', 'new_run.py', 'version.py'):
+                self.assertTrue((parent / 'geo-audit/scripts' / script).is_file())
+            with self.assertRaises(ValueError):
+                installer.install(parent, keep_backups=0)
 
     def test_source_install_rejected(self):
         with self.assertRaises(ValueError):

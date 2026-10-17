@@ -1,13 +1,19 @@
 """Validated audit run model. No fetching or truth verification is performed."""
 import argparse
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 import json
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from evidence import strict_json, validate_registry, resolve_ids
+from evidence import strict_json, validate_registry, resolve_ids, extract, structured_data_markers, parse_timestamp
 from score import calculate, nonempty, WEIGHTS
 from review_topics import TOPICS
+from version import RUN_SCHEMA_VERSION, SUPPORTED_RUN_SCHEMAS
+
+# new_run.py marks every value a reviewer must replace with this text.
+PLACEHOLDER = "[skeleton placeholder]"
+# Captures much older than the audit date are probably reused from another run.
+STALE_CAPTURE = timedelta(days=180)
 
 
 def fields(value, required, label):
@@ -29,13 +35,23 @@ def web_url(value):
 
 
 def validate_run(run):
+    """Validate structure and provenance; return the computed scores."""
+    return audit_run(run)[0]
+
+
+def audit_run(run):
+    """Validate a run and return (scores, warnings).
+
+    Schema 1.4.0 rejects every provenance issue. Older schemas stay readable
+    without modification, so the same issues are reported as warnings instead.
+    """
     version = run.get('schema_version') if isinstance(run, dict) else None
     required = {"schema_version", "metadata", "assessment", "summary", "limitations", "findings"}
-    if version == '1.3.0':
+    if version in {'1.3.0', '1.4.0'}:
         required.add('review')
     fields(run, required, "Run")
-    if version not in {"1.2.0", "1.3.0"}:
-        raise ValueError("Unsupported schema_version")
+    if version not in SUPPORTED_RUN_SCHEMAS:
+        raise ValueError(f"Unsupported schema_version; new runs use {RUN_SCHEMA_VERSION}")
     meta = run["metadata"]
     fields(meta, {"url", "date", "business_type", "market", "language", "sample", "sampling_rationale"}, "Metadata")
     web_url(meta["url"])
@@ -92,9 +108,89 @@ def validate_run(run):
             if url not in meta["sample"]:
                 raise ValueError("Affected URL is outside the declared sample")
         resolve_ids(finding["evidence_ids"], registry, require_success=finding["kind"] != "unknown")
-    if version == '1.3.0':
+    if version != '1.2.0':
         validate_review(run['review'], meta['sample'], registry)
-    return scores
+    issues = provenance_issues(run, registry, scores)
+    if version == RUN_SCHEMA_VERSION and issues:
+        raise ValueError("; ".join(issues))
+    warnings = [f"Schema {version} accepts this, schema {RUN_SCHEMA_VERSION} rejects it: {issue}" for issue in issues]
+    return scores, warnings + advisory_warnings(run, registry)
+
+
+def provenance_issues(run, registry, scores):
+    """Evidence-linkage problems that schema 1.4.0 rejects outright."""
+    sample = run["metadata"]["sample"]
+    issues = [f"Sample URL contains a fragment, which never reaches the server: {url}" for url in sample if "#" in url]
+    for finding in run["findings"]:
+        label = f"Finding {finding['id']}"
+        if len(set(finding["affected_urls"])) != len(finding["affected_urls"]):
+            issues.append(f"{label} lists an affected URL more than once")
+        if finding["kind"] in {"unknown", "hypothesis"} and finding["severity"] in {"critical", "high"}:
+            issues.append(f"{label} is a {finding['kind']} rated {finding['severity']}; "
+                          "critical and high severity require a verified problem")
+        if finding["kind"] != "unknown":
+            captured = {registry[key]["source"] for key in finding["evidence_ids"]}
+            missing = [url for url in finding["affected_urls"] if url not in captured]
+            if missing:
+                issues.append(f"{label} cites no capture of its affected page(s): {', '.join(missing)}")
+    inventories = {}
+    for criterion in scores["criteria"]:
+        if criterion["status"] != "not_applicable" or criterion["reason"] != "no_structured_data_in_sample":
+            continue
+        for key in criterion["evidence_ids"]:
+            record = registry[key]
+            if record["source"] not in sample:
+                continue
+            if key not in inventories:
+                inventories[key] = structured_data_markers(extract(record["content"]))
+            if inventories[key]:
+                issues.append(f"{criterion['id']} is marked no_structured_data_in_sample, but evidence {key} "
+                              f"contains {', '.join(inventories[key])}")
+    return issues
+
+
+def advisory_warnings(run, registry):
+    """Plausibility checks for a human reviewer; never a reason to reject a run."""
+    meta, warnings = run["metadata"], []
+    origin = site_host(meta["url"])
+    for url in meta["sample"]:
+        host = site_host(url)
+        if host != origin and not host.endswith("." + origin):
+            warnings.append(f"Sample URL is outside the audited site {origin}: {url}")
+    audit_day = date.fromisoformat(meta["date"])
+    now = datetime.now(timezone.utc)
+    for key, record in registry.items():
+        stamp = parse_timestamp(record["collected_at"])
+        day = stamp.astimezone(timezone.utc).date()
+        if stamp > now + timedelta(days=1):
+            warnings.append(f"Evidence {key} has a collection time in the future: {record['collected_at']}")
+        elif day > audit_day + timedelta(days=1):
+            warnings.append(f"Evidence {key} was collected after the audit date {meta['date']}")
+        elif day < audit_day - STALE_CAPTURE:
+            warnings.append(f"Evidence {key} was collected more than {STALE_CAPTURE.days} days before the audit date")
+    placeholders = sum(PLACEHOLDER in text for text in run_text(run))
+    if placeholders:
+        warnings.append(f"{placeholders} field(s) still contain the run skeleton placeholder; "
+                        "replace them before delivery")
+    return warnings
+
+
+def site_host(url):
+    host = urlsplit(url).hostname or ""
+    return host[4:] if host.startswith("www.") else host
+
+
+def run_text(run):
+    """Every reviewer-written text value in a run."""
+    yield run["summary"]
+    yield from run["limitations"]
+    for finding in run["findings"]:
+        yield from (value for value in finding.values() if isinstance(value, str))
+    for item in run.get("review", []):
+        yield item["summary"]
+    for items in run["assessment"]["criteria"].values():
+        for item in items:
+            yield from (item.get(key, "") for key in ("rationale", "reason"))
 
 
 def validate_review(review, sample, registry):
@@ -126,7 +222,11 @@ def validate_review(review, sample, registry):
 def comparable(current, previous):
     a, b = validate_run(current), validate_run(previous)
     keys = ("url", "business_type", "market", "language", "sample", "sampling_rationale")
-    differences = [key for key in keys if current["metadata"][key] != previous["metadata"][key]]
+    def scope(run, key):
+        # The sample is a set of pages; listing the same pages in another order changes nothing.
+        value = run["metadata"][key]
+        return set(value) if key == "sample" else value
+    differences = [key for key in keys if scope(current, key) != scope(previous, key)]
     for key in ("rubric_version", "rubric_sha256"):
         if a[key] != b[key]:
             differences.append(key)
@@ -140,11 +240,12 @@ def comparable(current, previous):
             "limitation": "Matching scope permits editorial comparison, not causal attribution or measured AI visibility."}
 
 
-def report_data(run, *, technical=False):
+def report_data(run, *, technical=False, evidence_limit=None):
+    """Report model. evidence_limit shortens each technical capture (used for PDF) with a visible note."""
     if not technical:
         from client_report import client_report_data
         return client_report_data(run, validate_run(run))
-    scores = validate_run(run)
+    scores, warnings = audit_run(run)
     meta = run["metadata"]
     sections = []
     def section(title, text):
@@ -154,6 +255,8 @@ def report_data(run, *, technical=False):
         f"Rubric: {scores['rubric_version']} / SHA-256: {scores['rubric_sha256']}",
         f"Market: {meta['market']} | Language: {meta['language']}",
         f"Sampling: {meta['sampling_rationale']}", *meta["sample"], *run["limitations"]]))
+    if warnings:
+        section("Validation warnings", "\n".join(warnings))
     section("Assessment coverage", "\n".join(
         f"{category}: score {row['score'] if row['score'] is not None else 'Not assessed'}; "
         f"assessed {row['assessed']}/{row['expected']}; unknown {row['unknown']}; "
@@ -174,10 +277,15 @@ def report_data(run, *, technical=False):
         section(f"Detailed review {item['category']}.{item['topic']}", '\n'.join(
             f"{key}: {', '.join(value) if isinstance(value, list) else value}" for key, value in item.items()))
     for item in run["assessment"]["evidence"]:
+        content = item["content"]
+        if evidence_limit is not None and len(content) > evidence_limit:
+            content = (content[:evidence_limit] + f"\n[Shortened for this export: first {evidence_limit:,} of "
+                       f"{len(item['content']):,} characters. The complete capture and its SHA-256 are in run.json "
+                       "and the technical HTML export.]")
         section(f"Evidence {item['id']}", "\n".join([
             f"Source: {item['source']}", f"Collected: {item['collected_at']}",
             f"Method: {item['method']} | Status: {item['status']}", f"SHA-256: {item['sha256']}",
-            "Captured content (untrusted source text):", item["content"]]))
+            "Captured content (untrusted source text):", content]))
     return {"url": meta["url"], "date": meta["date"], "business_type": meta["business_type"],
             "pages_analyzed": str(len(meta["sample"])), "overall_score": scores["overall"],
             "score_label": "Editorial readiness" if scores["overall"] is not None else "Not assessed",
@@ -191,7 +299,8 @@ def main():
     args = parser.parse_args()
     try:
         run = strict_json(args.run.read_text(encoding="utf-8"))
-        result = {"valid": True, "scores": validate_run(run)}
+        scores, warnings = audit_run(run)
+        result = {"valid": True, "warnings": warnings, "scores": scores}
         if args.compare:
             result["comparison"] = comparable(run, strict_json(args.compare.read_text(encoding="utf-8")))
             if not result["comparison"]["comparable"]:

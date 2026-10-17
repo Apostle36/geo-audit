@@ -1,5 +1,9 @@
 # Phase 1 verification and handoff
 
+> Historical record of the Phase 1 handoff on 2026-09-10. Test counts,
+> behaviour and limitations below describe the toolkit on that date; see
+> README.md and docs/RUN-FORMAT.md for the current toolkit.
+
 Date: 2026-09-10. Scope: reliability foundation requested in the pasted brief's
 execution order. The later SaaS phases are intentionally not implemented.
 
@@ -46,7 +50,7 @@ Command used on this machine:
 
 ```sh
 GEO_RUN_RENDER_TESTS=1 \
-PYTHONPATH=/home/leo/.local/share/pipx/venvs/playwright/lib/python3.14/site-packages \
+PYTHONPATH=~/.local/share/pipx/venvs/playwright/lib/python3.14/site-packages \
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -q
 ```
 
