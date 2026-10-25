@@ -3,7 +3,9 @@
   python3 collect.py discover https://example.com/ OUTPUT_DIR
       Read robots.txt and sitemaps (expanding indexes) and list candidate pages,
       with the robots decision for common search, training and user-triggered
-      crawler tokens. No page other than robots.txt and sitemaps is fetched.
+      crawler tokens. When no candidates are found, inspect one starting page
+      for bounded same-site navigation links; do not fetch those destinations.
+      --no-navigation-fallback restricts discovery to robots.txt and sitemaps.
 
   python3 collect.py fetch OUTPUT_DIR URL [URL ...]    (or --urls-file FILE)
       Capture each chosen sample URL once. Writes validated evidence records for
@@ -36,7 +38,7 @@ import string
 import sys
 import time
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urljoin, urlsplit
+from urllib.parse import quote, urldefrag, urljoin, urlsplit
 import urllib.request
 from xml.etree import ElementTree
 import zlib
@@ -57,6 +59,8 @@ SITEMAP_TEXT_LIMIT = 50 * 1024 * 1024
 SITEMAP_EMBED_LIMIT = 200_000
 MAX_SITEMAPS = 50
 MAX_SITEMAP_URLS = 50_000
+MAX_NAVIGATION_URLS = 100
+MAX_NAVIGATION_LINKS = 1000
 
 TOKEN = "GEO-Audit"
 USER_AGENT = f"{TOKEN}/{TOOLKIT_VERSION} (+local website readiness review)"
@@ -612,9 +616,117 @@ def parse_sitemap(text):
     return ("index" if local == "sitemapindex" else "urlset"), entries
 
 
+class NavigationLinks(HTMLParser):
+    def __init__(self, base):
+        super().__init__(convert_charrefs=True)
+        self.base, self.base_seen, self.links, self.current = base, False, [], None
+        self.truncated = False
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if tag == 'base' and not self.base_seen and attrs.get('href'):
+            self.base, self.base_seen = urljoin(self.base, attrs['href']), True
+        if tag == 'a' and attrs.get('href'):
+            if len(self.links) >= MAX_NAVIGATION_LINKS:
+                self.truncated = True
+                self.current = None
+                return
+            self.current = {'href': attrs['href'], 'label': attrs.get('title') or '', 'text': ''}
+            self.links.append(self.current)
+
+    def handle_endtag(self, tag):
+        if tag == 'a':
+            self.current = None
+
+    def handle_data(self, data):
+        if self.current and len(self.current['text']) < 160:
+            self.current['text'] += data[:160]
+
+
+def navigation_candidates(text, origin, final_url, limit):
+    if type(limit) is not int or not 1 <= limit <= MAX_NAVIGATION_URLS:
+        raise ValueError(f'Navigation candidate limit must be 1–{MAX_NAVIGATION_URLS}')
+    parser = NavigationLinks(final_url)
+    parser.feed(text)
+    scope = host_twins(origin)
+    origin_port = urlsplit(origin).port
+    ports = {origin_port} if origin_port is not None else {None, 80, 443}
+    candidates, seen, skipped = [], set(), 0
+    links = [{'href': origin, 'label': 'Starting page', 'text': ''}, *parser.links]
+    for link in links:
+        try:
+            url = urldefrag(urljoin(parser.base, link['href'].strip()))[0]
+            parts = urlsplit(url)
+            if (check_urls([url]) or parts.username or parts.password
+                    or (parts.hostname or '').lower() not in scope or parts.port not in ports
+                    or re.search(r'\.(?:pdf|jpe?g|png|gif|svg|webp|css|js|zip|woff2?)(?:$)', parts.path, re.I)):
+                skipped += 1
+                continue
+        except ValueError:
+            skipped += 1
+            continue
+        if url in seen:
+            continue
+        seen.add(url)
+        candidates.append({'loc': url, 'source': 'navigation', 'from': origin,
+                           'label': ' '.join((link['label'] or link['text']).split())[:120]})
+        if len(candidates) == limit:
+            break
+    return candidates, {'links_inspected': len(parser.links), 'filtered_links': skipped,
+                        'truncated': parser.truncated or len(candidates) == limit}
+
+
+def navigation_discovery(client, origin, id_prefix, limit, raw_dir=None):
+    identifier = f'{id_prefix}-navigation'
+    log = {'used': True, 'seed': origin, 'status': 'unavailable', 'evidence_id': identifier}
+    problem = client.refusal(origin)
+    if not problem and not robots_for(client, origin).decision(TOKEN, origin)['allowed']:
+        problem = f'disallowed by robots.txt for {TOKEN}'
+    if problem:
+        return [], record(identifier, origin, now(), f'Navigation discovery not fetched: {problem}', 'unavailable'), {
+            **log, 'reason': problem}
+    chain, notes, error = follow(client, origin, host_twins(origin), allowed_for(client))
+    if error:
+        return [], record(identifier, origin, now(), f'Navigation discovery failed: {error}', 'failed'), {
+            **log, 'status': 'failed', 'reason': error}
+    response = chain[-1]
+    text, _, note = decode(response)
+    if note:
+        notes.append(note)
+    captured = record(identifier, origin, response.collected_at,
+                      describe(origin, chain, text, notes, '[Non-HTML body omitted]'), 'success')
+    body_digest = hashlib.sha256(response.body).hexdigest()
+    log.update(final_url=response.url, http_status=response.status, content_type=response.header('content-type'),
+               flags=flags(response, text), notes=notes, body_sha256=body_digest,
+               raw_bytes_available=raw_dir is not None)
+    if raw_dir is not None:
+        raw_dir = Path(raw_dir)
+        raw_path = raw_dir / f'{body_digest}.bin'
+        if not raw_path.exists():
+            write_new(raw_path, response.body)
+        log['raw_path'] = str(raw_path.relative_to(raw_dir.parent))
+    if (response.status != 200 or response.location or text is None
+            or not any(kind in (response.header('content-type') or '').lower() for kind in ('text/html', 'application/xhtml+xml'))
+            or 'possible_challenge' in log['flags'] or 'possible_soft_404' in log['flags']):
+        return [], captured, {**log, 'reason': 'No usable, in-scope HTML navigation response was observed.'}
+    candidates, counts = navigation_candidates(text, origin, response.url, limit)
+    allowed = [item for item in candidates if not client.refusal(item['loc'])
+               and robots_for(client, item['loc']).decision(TOKEN, item['loc'])['allowed']]
+    log.update(status='success', **counts, candidate_count=len(allowed),
+               robots_or_address_filtered=len(candidates) - len(allowed))
+    return allowed, captured, log
+
+
+def discovery_limits(max_sitemaps, max_urls):
+    if (type(max_sitemaps) is not int or not 1 <= max_sitemaps <= MAX_SITEMAPS
+            or type(max_urls) is not int or not 1 <= max_urls <= MAX_SITEMAP_URLS):
+        raise ValueError(f'Discovery limits must be 1–{MAX_SITEMAPS} sitemaps and 1–{MAX_SITEMAP_URLS} URLs')
+
+
 def discover(client, origin, *, agents=REPORT_AGENTS, max_sitemaps=MAX_SITEMAPS, max_urls=MAX_SITEMAP_URLS,
-             id_prefix="discovery"):
+             id_prefix="discovery", navigation_fallback=True, raw_dir=None):
     """Robots, sitemaps and candidate pages for one origin. Returns (summary, evidence records)."""
+    discovery_limits(max_sitemaps, max_urls)
     robots, robots_evidence = robots_record(client, origin, id_prefix)
     evidence, notes = [robots_evidence], []
     scope = host_twins(origin)
@@ -676,6 +788,13 @@ def discover(client, origin, *, agents=REPORT_AGENTS, max_sitemaps=MAX_SITEMAPS,
     elif queue:
         truncated = True
         notes.append(f"Stopped after {max_sitemaps} sitemaps; {len(queue)} more were not fetched")
+    navigation = {'used': False}
+    if not candidates and navigation_fallback:
+        found, capture, navigation = navigation_discovery(client, origin, id_prefix,
+                                                         min(max_urls, MAX_NAVIGATION_URLS), raw_dir)
+        evidence.append(capture)
+        candidates.update((item['loc'], item) for item in found)
+        notes.append('Sitemap discovery yielded no candidates; inspected one starting page for bounded navigation links.')
     by_origin = {}
     for url in candidates:
         parts = urlsplit(url)
@@ -697,7 +816,7 @@ def discover(client, origin, *, agents=REPORT_AGENTS, max_sitemaps=MAX_SITEMAPS,
     summary = {"origin": origin, "collected_at": now(), "collector": USER_AGENT, "robots": robots.summary(),
                "agents": report, "sitemaps": sitemaps, "candidates": list(candidates.values()),
                "candidate_count": len(candidates), "out_of_scope": out_of_scope, "truncated": truncated,
-               "notes": notes}
+               "notes": notes, "navigation": navigation}
     return summary, evidence
 
 
@@ -780,6 +899,7 @@ def main():
     find.add_argument("output", type=Path)
     find.add_argument("--max-sitemaps", type=int, default=MAX_SITEMAPS)
     find.add_argument("--max-urls", type=int, default=MAX_SITEMAP_URLS)
+    find.add_argument('--no-navigation-fallback', action='store_true', help='Inspect only robots.txt and sitemaps')
     get = commands.add_parser("fetch", help="Capture the chosen sample pages as evidence records")
     get.add_argument("output", type=Path)
     get.add_argument("urls", nargs="*")
@@ -795,14 +915,18 @@ def main():
     client = Client(delay=args.delay, allow_private=args.allow_private)
     try:
         if args.command == "discover":
+            discovery_limits(args.max_sitemaps, args.max_urls)
             if check_urls([args.origin]):
                 parser.error("; ".join(check_urls([args.origin])))
             args.output.mkdir(parents=True, exist_ok=True)
             targets = [args.output / "discovery.json", args.output / "discovery-evidence.json"]
             for target in targets:
                 check_new(target)
+            raw_dir = args.output / 'raw'
+            raw_dir.mkdir(exist_ok=True)
             summary, evidence = discover(client, args.origin, agents=agents,
-                                         max_sitemaps=args.max_sitemaps, max_urls=args.max_urls)
+                                         max_sitemaps=args.max_sitemaps, max_urls=args.max_urls,
+                                         navigation_fallback=not args.no_navigation_fallback, raw_dir=raw_dir)
             validate_registry(evidence)
             write_new(targets[0], dump(summary))
             write_new(targets[1], dump(evidence))

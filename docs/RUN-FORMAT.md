@@ -1,6 +1,6 @@
 # Validated run formats 1.2.0, 1.3.0 and 1.4.0
 
-Toolkit 1.4.0 writes new audits in **run schema 1.4.0**. Runs in schemas 1.2.0
+Toolkit 1.5.1 writes new audits in **run schema 1.4.0**. Runs in schemas 1.2.0
 and 1.3.0 remain accepted without modification. The **score rubric stays 1.2.0
 and its pinned hash is unchanged**. A client report is the default; add
 `--technical` to export raw captures and internal criteria separately.
@@ -66,6 +66,20 @@ For comprehensive methodology read AUDIT-DEPTH.md and CLIENT-REPORT.md.
 
 The exact 1.2.0 contract below is retained for existing runs. Adding `review` to
 a 1.2.0 run is rejected: use 1.4.0 explicitly and preserve the original file.
+
+Workflow configuration, frozen samples, collection checkpoints and delivery
+approvals are separate files; they do not add fields to run.json. Browser
+observations use the same evidence envelope, embedding their DOM and local
+measurement values. See WORKFLOW.md for collection limits and final-export checks.
+
+Browser measurements may include `content_readiness` with `met`, `unverified` or
+`timeout` plus the configured selector/count and bounded timing. Those values
+are embedded captured text, not new run-envelope fields. A successfully saved
+partial snapshot retains evidence status `success`; its separate content
+condition must not be mistaken for a whole-page completeness judgment. Workflow
+configuration 1.1.0 records conditions; 1.0.0 remains readable. Navigation-fallback
+HTTP seed evidence is reused when sampled, and CLI/workflow captures preserve
+the original body bytes and hash.
 
 The authoritative artifact is `run.json`. It embeds captured text, so evidence
 cannot silently disappear when a report is moved. This is a local, manually

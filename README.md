@@ -1,5 +1,5 @@
 # GEO Audit
-Version 1.4.0: comprehensive website readiness review with readable reports and separately preserved evidence. This is a local agent-assisted toolkit, not a SaaS or live AI-visibility tracker.
+Version 1.6.0: action tracking, fresh-evidence verification and compatible audit comparisons. This is a local agent-assisted toolkit, not a SaaS or live AI-visibility tracker.
 
 The audit covers 34 detailed topics across five areas, with business-specific
 guidance, page-level findings, strengths, missing checks and an action plan.
@@ -23,13 +23,54 @@ python3 -m venv .venv
 The installer bundles instructions, role definitions, scripts, rubric and format documentation into geo-audit/. It stages a complete package and preserves prior customisations in .backups/, keeping the five newest (`--keep-backups N` to change). Obsolete active files are removed from the new package, but remain in the backup. Atomic upgrades require Linux renameat2; unsupported systems fail without changing the prior install. Global role conflicts are reported, never overwritten. The orchestrator must explicitly read the bundled role files. Restart/reload the agent session after installing. This source update does not automatically update existing global installations.
 
 ## Run
+For post-audit assignments and follow-ups, see [Action tracking and comparisons](docs/ACTIONS.md).
+Owners, effort, dependencies and verification history stay separate from the
+original run. “Done” queues verification. “Resolved” requires a passing named
+review of fresh evidence bound to the exact follow-up. Reports gain an optional
+“What changed” section; final approvals bind that context as well as the run.
+
+For a guided local workflow, see [start, sample, resume, review and deliver](docs/WORKFLOW.md):
+
+```sh
+python scripts/audit.py start /absolute/path/new-audit --url https://example.com/ \
+  --business-type Services --market UK --language en --browser
+python scripts/audit.py sample /absolute/path/new-audit --sample https://example.com/ \
+  --sampling-rationale 'Homepage and its main customer question.'
+python scripts/audit.py resume /absolute/path/new-audit
+python scripts/audit.py status /absolute/path/new-audit
+```
+
+Discovery pauses for a justified sample. Resume checkpoints each page/viewport,
+preserves interrupted attempts and creates run.json for analyst assessment.
+`resume --retry-failed` appends new evidence while preserving existing analysis.
+Optional browser collection saves desktop/mobile DOM, viewport screenshots and
+local navigation/paint timings; it does not measure field Core Web Vitals or
+assign scores. Browser restrictions and incomplete captures are recorded.
+
+For JavaScript content, configure a bounded expected-content condition at start:
+`--ready-selector .quote --ready-min-count 10 --ready-timeout-ms 5000`.
+The condition checks visible document elements, including content below the
+viewport; it is not a whole-page completeness or usability guarantee. Without a
+condition, readiness is explicitly unverified. A timeout retains the DOM and
+screenshot, returns exit 4, and is retryable with `resume --retry-failed`.
+`--settle-ms` sets the initial 0–5000 ms settling interval. Conditions are saved
+in workflow configuration; existing 1.0.0 configurations remain readable.
+
+Client exports default to labelled drafts. After reviewing findings and evidence,
+a named reviewer can approve the exact run with `delivery.py`; `--final` requires
+that current approval. Placeholders, unfinished required checks and unexplained
+warnings block approval. Explicit exclusions remain visible. Editing run.json
+invalidates approval. Run schema 1.4.0 and rubric 1.2.0 are unchanged.
+
 Invoke /geo-audit https://example.com with the updated skill installed. Each run uses a unique audits/<hostname>/<UTC timestamp>/ directory. Its authoritative artifact is run.json, embedding metadata, captured evidence, findings and assessment. Reports derive from that validated data.
 
 Collection is done by `scripts/collect.py`, a bounded, polite HTTP collector:
 
 1. `collect.py discover` reads robots.txt (RFC 9309), expands sitemap indexes and
    lists candidate pages, with the robots decision for common search, training and
-   user-triggered crawler tokens.
+   user-triggered crawler tokens. If sitemaps yield none, it captures one starting
+   page and suggests up to 100 same-site navigation URLs without following them.
+   The workflow reuses that response if selected, preserving original raw bytes.
 2. The agent chooses and justifies the sample.
 3. `collect.py fetch` captures each sample page once, enforcing the method's limits:
    50 pages, 30 seconds and 5 MiB per response, 5 redirects and at least one
@@ -39,9 +80,9 @@ Collection is done by `scripts/collect.py`, a bounded, polite HTTP collector:
 4. `new_run.py` creates a schema 1.4.0 run.json with that evidence embedded and every
    criterion and topic marked unknown, ready for the specialist roles.
 
-It does not run JavaScript, solve bot challenges or log in; rendering, mobile and
-performance checks still need a browser or measurement tool and are recorded as
-unknown until done.
+The HTTP collector does not run JavaScript, solve bot challenges or log in.
+Opt-in browser collection supplements it with rendered observations; deeper
+interaction, accessibility and field performance checks remain unknown until done.
 
 Helpers:
 ```bash
@@ -110,6 +151,20 @@ Set GEO_RENDER_ARTIFACTS to an existing writable directory to retain fixtures/PD
 Built by Apostolos Bolkas. Inspired by https://github.com/zubair-trabzada/geo-seo-claude.
 Research context: https://arxiv.org/abs/2311.09735. Study results are not guarantees for this rubric or an individual website.
 
+
+## Changes in 1.5.1
+
+- Configured, bounded browser content conditions with met/unverified/timeout states and preserved timeout snapshots.
+- Navigation candidate fallback when sitemaps yield no pages, with seed reuse and a distinct-page budget.
+- Readable page labels, capture-condition caveats and more compact methodology pagination.
+- Interruption guidance, timeout retry/exit status, and compatibility with existing workflow/run/rubric versions.
+
+## Changes in 1.5.0
+
+- Guided start/sample/resume/status/export commands with immutable checkpoints and explicit retries.
+- Optional desktop/mobile rendered DOM, viewport screenshots and local timings.
+- Delivery readiness checks, named scope exclusions and exact-snapshot review approvals.
+- Visible draft labels and gated final exports; existing run and scoring contracts retained.
 
 ## Changes in 1.4.0
 

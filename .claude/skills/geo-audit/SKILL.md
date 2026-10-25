@@ -1,7 +1,7 @@
 ---
 name: geo-audit
 metadata:
-  version: "1.4.0"
+  version: "1.6.0"
 description: Website GEO and SEO readiness audit with saved evidence, explicit uncertainty, and optional measured AI visibility.
 ---
 
@@ -11,11 +11,19 @@ Assess the supplied website. Readiness is an editorial assessment, not a predict
 Deliver a comprehensive audit by default, with a readable executive summary AND detailed category findings. A request for simpler language does not authorize reducing audit depth. For a quick review, explicitly label the reduced scope. This skill does not edit the audited site, deploy, buy services or publish client information without authorization.
 
 ## Resources and preflight
+Read docs/ACTIONS.md for post-audit work. Use a separate action journal for owner, effort, dependencies and status; marking done queues verification. A named review against fresh compatible evidence is required for verified status. Declare agent reviews as agent reviews. Missing findings alone are unresolved. Use --compare/--actions for the What changed and action tracking report sections; final approval must bind that complete context. Never rewrite the baseline to update task status.
+
+Read docs/WORKFLOW.md for the resumable CLI. Prefer `scripts/audit.py start/sample/resume/status` when collecting a new audit. Browser collection is opt-in with `--browser`; it captures desktop/mobile DOM, screenshots and lab timings without assigning scores. It executes public JavaScript under the documented local-tool limits. Failed and unavailable steps remain visible; use `resume --retry-failed` to preserve prior attempts and append new evidence without rewriting findings.
+
+Configure `--ready-selector`, `--ready-min-count` and a bounded `--ready-timeout-ms` when expected document content is known. Without a condition, readiness is unverified. A saved snapshot can have a timed-out content condition: inspect it and retry explicitly rather than treating it as complete. Preserve the condition and original timing evidence. Discovery now inspects one starting page for bounded navigation candidates if sitemaps yield none; reuse that capture and its original bytes when selected. The workflow enforces the distinct-page budget including this seed. Read the report's capture conditions, mobile layout caveats and blocked resources before drawing conclusions.
+
 Resolve scripts/, agents/ and docs/ relative to this installed skill directory. In the repository use ../../../scripts/, ../../agents/ and ../../../docs/. Read docs/RUN-FORMAT.md and scripts/rubrics/1.2.0.json completely before collecting or assessing. Never assume the working directory or a user's home path. Run the --help of scripts/collect.py, scripts/new_run.py and the PDF script before starting. If rendering is unavailable, deliver validated run.json and HTML and disclose the limitation.
 
 Read docs/AUDIT-DEPTH.md and docs/CLIENT-REPORT.md completely. They restore the full diagnostic coverage, business-type adaptations and client-report requirements. The ten scored criteria are NOT a substitute for the detailed topics in scripts/review_topics.py. For new audits use run schema 1.4.0 with detailed `review` records; scoring remains on immutable rubric 1.2.0. Schema 1.4.0 rejects provenance problems that older schemas only report as warnings. Historical 1.2.0 and 1.3.0 runs remain readable and their missing detailed coverage stays visible.
 
 ## Scope and evidence
+The guided workflow performs the discovery, sample selection, capture and skeleton creation described below. Reuse its checkpoint evidence and generated run.json. The individual helper commands below provide the equivalent manual path; collecting the same pages again is unnecessary.
+
 1. Record origin, market, language, business type, date, rubric version 1.2.0, and sampling rationale. Confirm inferred business facts before treating them as verified.
 2. Create a unique audits/<hostname>/<UTC timestamp>/ with run.json, evidence/ and reports. run.json embeds metadata, evidence, findings and assessment in the documented contract. Do not overwrite old runs.
 3. Run `scripts/collect.py discover <origin> <run>/evidence/`. It reads robots.txt under RFC 9309, expands sitemap indexes and lists candidate pages with robots decisions for common crawler tokens. Choose the sample from it: important navigation, services/products, about/contact and recent articles, recording why.
@@ -58,6 +66,8 @@ Compare runs only when origin, language, market, sample, criteria, and rubric ma
 Record branded/non-branded prompts, platform/model, date, language, market, search mode, responses, and cited URLs. Repeat observations; distinguish mentions from citations and report sample size. Without this work explicitly state "AI visibility not measured".
 
 ## Report and PDF
+Client exports default to visibly labelled drafts. `scripts/delivery.py check run.json` lists delivery blockers. A named reviewer records an approval with `delivery.py approve` only after actually reviewing the findings, evidence and scope. Do not invent a reviewer or automatically attest on a person's behalf. Final client exports require `--final` and a current approval tied to the exact run bytes. Explicit exclusions need an authorised scope decision and a concrete reason; all exclusions and warning qualifications appear in final reports. Preserve earlier approvals and use a new named file after changes. See docs/WORKFLOW.md for commands.
+
 Write and validate run.json before delivery. Include a plain-English summary and explicit limitations. Run scripts/run_contract.py with its absolute path, inspect coverage, unknowns and every entry in `warnings` even when validation succeeds, and correct all invalid records. No skeleton placeholder may remain in a delivered run. Validation proves structure and reference integrity, not truth of claims.
 Generate HTML and PDF from that same JSON using scripts/geo-audit-pdf.py input.json output.html (or output.pdf). The default report includes the core overview, detailed review, full findings, action plan and readable source links. Output replacement needs explicit --overwrite; never reuse an input path. Confirm PDF text and inspect pagination before claiming visual quality. Preserve JSON/HTML when rendering fails. Old Markdown is importable only through --legacy-markdown and remains visibly unverified.
 

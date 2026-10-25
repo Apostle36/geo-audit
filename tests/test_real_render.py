@@ -78,6 +78,51 @@ class RealRender(unittest.TestCase):
         pdf.export_report(source, technical, technical=True)
         self.assertIn('page-1', self.text(technical))
 
+    def test_action_tracking_and_verified_comparison_pdf(self):
+        from actions import initialise, update
+        from test_actions import baseline, followup, passed
+        from test_delivery import raw
+        before = baseline()
+        previous, current, store = self.directory / 'previous.json', self.directory / 'current.json', self.directory / 'actions'
+        previous.write_bytes(raw(before))
+        initialise(previous.read_bytes(), store)
+        update(store, 'F1', owner='Synthetic owner', effort_hours=2.5, status='ready_to_verify')
+        after = followup(before)
+        current.write_bytes(raw(after))
+        passed(store, 'F1', after)
+        output = self.directory / 'comparison.pdf'
+        pdf.export_report(current, output, previous_path=previous, actions_path=store)
+        text = self.text(output)
+        for marker in ('What changed', '1 resolved', 'Action tracking', 'Synthetic owner', '2.5 hours',
+                       before['findings'][0]['acceptance'], 'Codex (agent)', 'DRAFT'):
+            self.assertIn(marker, text)
+        self.assertNotIn('page-1', text)
+        self.assertEqual(previous.read_bytes(), raw(before))
+        self.assertEqual(current.read_bytes(), raw(after))
+
+    def test_draft_and_reviewed_final_pdf_states(self):
+        from delivery import approve
+        from test_delivery import complete_run
+        source = self.directory / 'run.json'
+        run = complete_run()
+        run['review'] = [item for item in run['review'] if (item['category'], item['topic']) != ('technical', 'performance')]
+        source.write_text(json.dumps(run))
+        approval = approve(source.read_bytes(), 'Synthetic test reviewer',
+                           exclusions={'review.technical.performance': 'Field-data access excluded in this test scope.'})
+        (self.directory / 'delivery.json').write_text(json.dumps(approval))
+        draft, final = self.directory / 'draft.pdf', self.directory / 'final.pdf'
+        pdf.export_report(source, draft)
+        pdf.export_report(source, final, final=True)
+        draft_text, final_text = self.text(draft), self.text(final)
+        self.assertIn('DRAFT', draft_text)
+        self.assertNotIn('DRAFT', final_text)
+        self.assertIn('Reviewed final report', final_text)
+        self.assertIn('Synthetic test reviewer', final_text)
+        self.assertIn('Field-data access excluded', ' '.join(final_text.split()))
+        self.assertIn('Synthetic test conclusion', final_text)
+        final_html = self.directory / 'final.html'
+        pdf.export_report(source, final_html, final=True)
+
     def test_detailed_client_mobile_and_pdf_fidelity(self):
         from test_audit_depth import detailed_run
         from playwright.sync_api import sync_playwright

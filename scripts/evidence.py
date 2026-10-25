@@ -208,6 +208,20 @@ def extract(html):
     return parser.result
 
 
+def document_title(html):
+    """Read a title without parsing unrelated structured data for a display label."""
+    class TitleOnly(Inventory):
+        def handle_starttag(self, tag, attrs):
+            if tag in {'title', *FOREIGN}:
+                super().handle_starttag(tag, attrs)
+    if html.startswith('Request: GET '):
+        html = html.partition('\n\n')[2]
+    parser = TitleOnly()
+    parser.feed(html)
+    parser.close()
+    return parser.result['title']
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description=__doc__)

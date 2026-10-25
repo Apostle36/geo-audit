@@ -14,6 +14,20 @@ the orchestrator. Use Bash only to run the bundled scripts or read-only local
 checks such as a browser render of a saved page; never submit forms, log in or
 run intrusion tests.
 
+When browser observations are present, inspect browser_collect.py captures beside
+the HTTP responses: rendered DOM, desktop/mobile viewport screenshots, requested
+versus actual layout dimensions, local navigation/paint timings and blocked
+resources. These are evidence for scoped analysis, not automatic findings or
+field Core Web Vitals. Do not mark interaction or accessibility checks complete
+from the screenshots alone. Ask the orchestrator to collect missing observations.
+
+Distinguish successful collection from the separately recorded content condition:
+met verifies only the configured selector/count, unverified makes no readiness
+claim, and timeout preserves an incomplete observation for diagnosis. Compare
+requested and actual layout widths even when overflow is false. Navigation
+fallback candidates are suggestions from one captured starting page, not proof
+that all those destinations were checked.
+
 ## Detailed review topics
 
 Return a review record for each topic:
