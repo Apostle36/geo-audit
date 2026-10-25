@@ -797,31 +797,9 @@ def generate_html(data: dict, content_lang=None) -> str:
 # PDF rendering
 # ---------------------------------------------------------------------------
 
-SYSTEM_BROWSERS = ("/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser")
-
-
 def launch_chromium(playwright):
-    """Explicit executable first, then Playwright's tested Chromium, then a system browser.
-
-    Playwright pins the Chromium build it is tested against, so a system browser is
-    used only when that build is not installed.
-    """
-    import shutil
-    from playwright.sync_api import Error
-    options = {"args": ["--disable-dev-shm-usage"]}
-    explicit = os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH")
-    if explicit:
-        return playwright.chromium.launch(executable_path=explicit, **options)
-    try:
-        return playwright.chromium.launch(**options)
-    except Error as exc:
-        if "Executable doesn't exist" not in str(exc):
-            raise
-        for candidate in SYSTEM_BROWSERS:
-            if shutil.which(candidate):
-                print(f"Playwright's Chromium is not installed; using {candidate}", file=sys.stderr)
-                return playwright.chromium.launch(executable_path=candidate, **options)
-        raise
+    from browser_runtime import launch_chromium as launch
+    return launch(playwright)
 
 
 def render_to_pdf(html_path: Path) -> bytes:
@@ -842,9 +820,11 @@ def render_to_pdf(html_path: Path) -> bytes:
         client = page.locator('meta[name="geo-client-report"]').count() > 0
         options = dict(format="A4", print_background=True, tagged=True, outline=True)
         if client:
+            state = page.locator('meta[name="geo-delivery-state"]').get_attribute('content')
+            label = 'DRAFT · GEO Audit' if state != 'ready' else 'GEO Audit'
             options.update(prefer_css_page_size=True, display_header_footer=True,
                 header_template='<span></span>',
-                footer_template='<div style="width:100%;text-align:center;font:9px sans-serif;color:#464644">GEO Audit · <span class="pageNumber"></span> / <span class="totalPages"></span></div>')
+                footer_template=f'<div style="width:100%;text-align:center;font:9px sans-serif;color:#464644">{label} · <span class="pageNumber"></span> / <span class="totalPages"></span></div>')
         else:
             options['margin'] = {"top": "0", "right": "0", "bottom": "0", "left": "0"}
         pdf_bytes = page.pdf(**options)
@@ -857,7 +837,7 @@ def render_to_pdf(html_path: Path) -> bytes:
 # ---------------------------------------------------------------------------
 
 def export_report(report_path, output_path, *, overwrite=False, legacy_markdown=False, technical=False,
-                  content_lang=None):
+                  content_lang=None, final=False, approval_path=None):
     from evidence import strict_json
     from run_contract import report_data
     from safe_io import check_output, atomic_write
@@ -865,7 +845,12 @@ def export_report(report_path, output_path, *, overwrite=False, legacy_markdown=
     check_output(report_path, output_path, overwrite)
     if output_path.suffix.lower() not in {".html", ".pdf"}:
         raise ValueError("Output must end in .html or .pdf")
-    text = report_path.read_text(encoding="utf-8")
+    raw = report_path.read_bytes()
+    text = raw.decode('utf-8')
+    if final and (legacy_markdown or technical):
+        raise ValueError('--final applies to structured client reports only')
+    if approval_path is not None and not final:
+        raise ValueError('--approval requires --final')
     if technical and legacy_markdown:
         raise ValueError('--technical requires a validated JSON run')
     pdf = output_path.suffix.lower() == ".pdf"
@@ -874,6 +859,11 @@ def export_report(report_path, output_path, *, overwrite=False, legacy_markdown=
     else:
         limit = TECHNICAL_PDF_EVIDENCE_CHARACTERS if technical and pdf else None
         data = report_data(strict_json(text), technical=technical, evidence_limit=limit)
+        if final:
+            from delivery import validate_approval
+            approval = Path(approval_path) if approval_path else report_path.with_name('delivery.json')
+            check_output(approval, output_path, overwrite)
+            data['delivery'] = validate_approval(raw, strict_json(approval.read_text(encoding='utf-8')))
     html = generate_html(data, content_lang)
     if output_path.suffix.lower() == ".html":
         atomic_write(report_path, output_path, html.encode("utf-8"), overwrite)
@@ -896,10 +886,13 @@ def main() -> None:
     parser.add_argument("--legacy-markdown", action="store_true", help="Import unverified legacy Markdown with a visible warning")
     parser.add_argument('--technical', action='store_true', help='Export internal criteria and captured evidence instead of the client report (PDF shortens each capture; HTML keeps it whole)')
     parser.add_argument('--content-lang', help='BCP 47 language of the run-written prose, such as el, when it is not English')
+    parser.add_argument('--final', action='store_true', help='Require a current review approval for a final client report')
+    parser.add_argument('--approval', type=Path, help='Approval file; default: delivery.json beside the run')
     args = parser.parse_args()
     try:
         export_report(args.report, args.output, overwrite=args.overwrite, legacy_markdown=args.legacy_markdown,
-                      technical=args.technical, content_lang=args.content_lang)
+                      technical=args.technical, content_lang=args.content_lang, final=args.final,
+                      approval_path=args.approval)
     except Exception as exc:
         parser.exit(2, f"Report failed: {exc}\n")
     print(f"Saved {args.output}")

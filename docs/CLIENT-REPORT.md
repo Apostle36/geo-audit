@@ -6,6 +6,14 @@ examples and the work plan. Do not expose JSON keys, evidence IDs or checksums
 in the main report. Link to readable source URLs; keep raw captures in the
 separate `--technical` export and authoritative run data.
 
+Since 1.5.1, browser capture conditions distinguish saved snapshots from met,
+unverified or timed-out expected-content checks. The latest saved observation
+per page/viewport is summarised, with mobile layout and blocked-resource caveats;
+earlier captures stay in technical evidence. This never assigns readiness points
+or authenticates page claims. Labels use captured document titles and concise
+URL fallbacks while retaining query distinctions. Compact print spacing in the
+method appendix reduces pagination waste without dropping findings or sources.
+
 List the complete sampled-page inventory once in the appendix. Do not repeat it
 under every observation. Full-sample observations inherit the report scope;
 partial observations name only the relevant pages in natural language. Keep
@@ -47,6 +55,14 @@ Citation URLs identify live pages; the run retains what was actually captured
 at the recorded time, since live pages can change.
 
 ## Export
+
+Client exports default to a visible draft label, repeated in PDF footers. Final
+exports require `--final` and a named approval of the exact run contents. Use
+`delivery.py check` to list unfinished work, then `delivery.py approve` after
+review. Explicit scope exclusions and warning qualifications appear in the
+report. Editing run.json invalidates approval. See [the workflow guide](WORKFLOW.md)
+for review, renewal and export commands. Legacy and technical exports cannot be
+labelled final client reports.
 
 ```sh
 python3 scripts/run_contract.py /absolute/path/run.json

@@ -7,7 +7,7 @@
 /geo-audit https://example.com
 ```
 
-The `/geo-audit` skill orchestrates the audit using explicitly loaded bundled roles and writes validated `run.json`, HTML and PDF in a unique run directory. It can perform roles sequentially when delegation is unavailable. Read `docs/RUN-FORMAT.md`, `docs/AUDIT-DEPTH.md` and `docs/CLIENT-REPORT.md` for toolkit 1.4.0 (versions live in `scripts/version.py`). New runs use schema 1.4.0; core scoring retains immutable rubric 1.2.0; detailed review is separate. Default reports are comprehensive and client-facing; `--technical` exports raw evidence separately.
+The `/geo-audit` skill orchestrates the audit using explicitly loaded bundled roles and writes validated `run.json`, HTML and PDF in a unique run directory. It can perform roles sequentially when delegation is unavailable. Read `docs/RUN-FORMAT.md`, `docs/AUDIT-DEPTH.md`, `docs/CLIENT-REPORT.md` and `docs/WORKFLOW.md` for toolkit 1.5.1 (versions live in `scripts/version.py`). New runs use schema 1.4.0; core scoring retains immutable rubric 1.2.0; detailed review is separate. Default client exports are labelled drafts; final reports require a current named review. `--technical` exports raw evidence separately.
 
 ## Development
 
@@ -28,6 +28,8 @@ Run `python -m unittest discover -s tests` and `ruff check scripts tests` before
 ## Collection
 
 `scripts/collect.py discover` reads robots.txt and sitemaps; `scripts/collect.py fetch` captures the chosen sample within the method's limits; `scripts/new_run.py` creates the run skeleton with that evidence.
+
+Use `scripts/audit.py` for guided start/sample/resume/status/export with per-page checkpoints. `--browser` at start enables desktop/mobile DOM, screenshots and local timing observations. It does not assign scores or establish field Core Web Vitals. Analysts still assess the saved run. Run `scripts/delivery.py check` and record a named approval only after reviewing the actual findings and evidence; never automatically approve on a human's behalf. Exclude unfinished checks only when an authorised scope decision supports the stated reason. Editing the run invalidates the approval. See docs/WORKFLOW.md.
 
 ## PDF Generation
 

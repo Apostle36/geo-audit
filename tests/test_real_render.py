@@ -78,6 +78,29 @@ class RealRender(unittest.TestCase):
         pdf.export_report(source, technical, technical=True)
         self.assertIn('page-1', self.text(technical))
 
+    def test_draft_and_reviewed_final_pdf_states(self):
+        from delivery import approve
+        from test_delivery import complete_run
+        source = self.directory / 'run.json'
+        run = complete_run()
+        run['review'] = [item for item in run['review'] if (item['category'], item['topic']) != ('technical', 'performance')]
+        source.write_text(json.dumps(run))
+        approval = approve(source.read_bytes(), 'Synthetic test reviewer',
+                           exclusions={'review.technical.performance': 'Field-data access excluded in this test scope.'})
+        (self.directory / 'delivery.json').write_text(json.dumps(approval))
+        draft, final = self.directory / 'draft.pdf', self.directory / 'final.pdf'
+        pdf.export_report(source, draft)
+        pdf.export_report(source, final, final=True)
+        draft_text, final_text = self.text(draft), self.text(final)
+        self.assertIn('DRAFT', draft_text)
+        self.assertNotIn('DRAFT', final_text)
+        self.assertIn('Reviewed final report', final_text)
+        self.assertIn('Synthetic test reviewer', final_text)
+        self.assertIn('Field-data access excluded', ' '.join(final_text.split()))
+        self.assertIn('Synthetic test conclusion', final_text)
+        final_html = self.directory / 'final.html'
+        pdf.export_report(source, final_html, final=True)
+
     def test_detailed_client_mobile_and_pdf_fidelity(self):
         from test_audit_depth import detailed_run
         from playwright.sync_api import sync_playwright
