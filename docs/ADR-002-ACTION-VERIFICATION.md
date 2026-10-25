@@ -1,7 +1,9 @@
 # ADR-002: Action journals and conservative audit comparisons
 
-**Status:** Accepted  
-**Date:** 2026-10-25  
+**Status:** Accepted
+
+**Date:** 2026-10-25
+
 **Deciders:** Repository maintainer through the authorised v1.6 implementation request
 
 ## Context
