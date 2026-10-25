@@ -7,7 +7,7 @@
 /geo-audit https://example.com
 ```
 
-The `/geo-audit` skill orchestrates the audit using explicitly loaded bundled roles and writes validated `run.json`, HTML and PDF in a unique run directory. It can perform roles sequentially when delegation is unavailable. Read `docs/RUN-FORMAT.md`, `docs/AUDIT-DEPTH.md`, `docs/CLIENT-REPORT.md` and `docs/WORKFLOW.md` for toolkit 1.5.1 (versions live in `scripts/version.py`). New runs use schema 1.4.0; core scoring retains immutable rubric 1.2.0; detailed review is separate. Default client exports are labelled drafts; final reports require a current named review. `--technical` exports raw evidence separately.
+The `/geo-audit` skill orchestrates the audit using explicitly loaded bundled roles and writes validated `run.json`, HTML and PDF in a unique run directory. It can perform roles sequentially when delegation is unavailable. Read `docs/RUN-FORMAT.md`, `docs/AUDIT-DEPTH.md`, `docs/CLIENT-REPORT.md`, `docs/WORKFLOW.md` and `docs/ACTIONS.md` for toolkit 1.6.0 (versions live in `scripts/version.py`). New runs use schema 1.4.0; core scoring retains immutable rubric 1.2.0; detailed review is separate. Default client exports are labelled drafts; final reports require a current named review. `--technical` exports raw evidence separately.
 
 ## Development
 
@@ -34,3 +34,7 @@ Use `scripts/audit.py` for guided start/sample/resume/status/export with per-pag
 ## PDF Generation
 
 The audit runs `scripts/run_contract.py run.json` before `scripts/geo-audit-pdf.py run.json report.pdf`. Resolve every entry in its `warnings`. See `README.md` for setup and limitations. Five core roles assess readiness; optional platform observations are separate and no live collection integration exists. Save evidence and reports in a unique run directory.
+
+## Follow-up work
+
+Use scripts/actions.py for a separate append-only action journal. Owner, estimated hours, dependencies and status never change run.json or scores. Completion means ready_to_verify; verified requires a fresh compatible follow-up and explicit named human/agent review. Declare agent reviews honestly. Use scripts/compare_runs.py or audit.py compare; absent findings remain unresolved without proof bound to the exact current bytes. --compare and --actions add client-report sections and must also be supplied when approving that final report. See docs/ACTIONS.md and ADR-002.

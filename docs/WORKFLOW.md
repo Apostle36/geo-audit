@@ -179,3 +179,7 @@ to structured client reports; technical and legacy exports keep their purpose.
 
 The original exporter also supports `--final` and `--approval`. Choose new output
 paths or explicitly use `--overwrite`; run and approval aliases are protected.
+
+## Action tracking and comparisons
+
+Toolkit 1.6 adds separate owner/effort/dependency/status journals, fresh-evidence acceptance reviews, and compatible follow-up comparisons. Supply `--compare /path/previous/run.json --actions /path/previous/actions` to include the “What changed” and action-tracking sections. The same context must be supplied to delivery review and final export. Missing findings are unresolved unless a passing review binds the exact follow-up bytes. See [ACTIONS.md](ACTIONS.md) for the commands, lifecycle and local integrity limits.

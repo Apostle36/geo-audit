@@ -146,3 +146,7 @@ The fonts directory must contain `AboutBeige/AboutBeige-Regular.woff2`,
 the toolkit. Only supply fonts you are permitted to use. Outputs embed the local
 fonts so the report remains portable. Regenerate HTML and PDF with the same
 settings and preserve earlier reports for comparison.
+
+## Action tracking and comparisons
+
+Toolkit 1.6 adds separate owner/effort/dependency/status journals, fresh-evidence acceptance reviews, and compatible follow-up comparisons. Supply `--compare /path/previous/run.json --actions /path/previous/actions` to include the “What changed” and action-tracking sections. The same context must be supplied to delivery review and final export. Missing findings are unresolved unless a passing review binds the exact follow-up bytes. See [ACTIONS.md](ACTIONS.md) for the commands, lifecycle and local integrity limits.

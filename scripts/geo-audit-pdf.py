@@ -837,7 +837,7 @@ def render_to_pdf(html_path: Path) -> bytes:
 # ---------------------------------------------------------------------------
 
 def export_report(report_path, output_path, *, overwrite=False, legacy_markdown=False, technical=False,
-                  content_lang=None, final=False, approval_path=None):
+                  content_lang=None, final=False, approval_path=None, previous_path=None, actions_path=None):
     from evidence import strict_json
     from run_contract import report_data
     from safe_io import check_output, atomic_write
@@ -849,6 +849,8 @@ def export_report(report_path, output_path, *, overwrite=False, legacy_markdown=
     text = raw.decode('utf-8')
     if final and (legacy_markdown or technical):
         raise ValueError('--final applies to structured client reports only')
+    if (previous_path is not None or actions_path is not None) and (legacy_markdown or technical):
+        raise ValueError('Action tracking and comparison apply to structured client reports only')
     if approval_path is not None and not final:
         raise ValueError('--approval requires --final')
     if technical and legacy_markdown:
@@ -859,11 +861,16 @@ def export_report(report_path, output_path, *, overwrite=False, legacy_markdown=
     else:
         limit = TECHNICAL_PDF_EVIDENCE_CHARACTERS if technical and pdf else None
         data = report_data(strict_json(text), technical=technical, evidence_limit=limit)
+        from report_context import prepare, protect_output
+        protect_output(output_path, previous=previous_path, actions=actions_path, overwrite=overwrite)
+        context, attachments = prepare(raw, previous=previous_path, actions=actions_path)
+        data.update(context)
         if final:
             from delivery import validate_approval
             approval = Path(approval_path) if approval_path else report_path.with_name('delivery.json')
             check_output(approval, output_path, overwrite)
-            data['delivery'] = validate_approval(raw, strict_json(approval.read_text(encoding='utf-8')))
+            data['delivery'] = validate_approval(raw, strict_json(approval.read_text(encoding='utf-8')),
+                                                 attachments=attachments)
     html = generate_html(data, content_lang)
     if output_path.suffix.lower() == ".html":
         atomic_write(report_path, output_path, html.encode("utf-8"), overwrite)
@@ -888,11 +895,13 @@ def main() -> None:
     parser.add_argument('--content-lang', help='BCP 47 language of the run-written prose, such as el, when it is not English')
     parser.add_argument('--final', action='store_true', help='Require a current review approval for a final client report')
     parser.add_argument('--approval', type=Path, help='Approval file; default: delivery.json beside the run')
+    from report_context import add_arguments
+    add_arguments(parser)
     args = parser.parse_args()
     try:
         export_report(args.report, args.output, overwrite=args.overwrite, legacy_markdown=args.legacy_markdown,
                       technical=args.technical, content_lang=args.content_lang, final=args.final,
-                      approval_path=args.approval)
+                      approval_path=args.approval, previous_path=args.compare, actions_path=args.actions)
     except Exception as exc:
         parser.exit(2, f"Report failed: {exc}\n")
     print(f"Saved {args.output}")

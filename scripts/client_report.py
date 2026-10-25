@@ -1,5 +1,5 @@
 """Client presentation of validated runs; never changes evidence or scoring."""
-from datetime import date
+from datetime import date, timezone
 from html import escape
 import base64
 import os
@@ -8,8 +8,9 @@ import re
 from urllib.parse import urlsplit, unquote
 from review_topics import TOPICS, CATEGORY_NAMES, CRITERION_NAMES
 from version import TOOLKIT_VERSION
-from evidence import document_title
+from evidence import document_title, parse_timestamp
 from capture_readiness import latest_browser_observations
+from finding_identity import disposition
 
 
 def safe_link(label, url):
@@ -76,6 +77,10 @@ def plural(count, singular, plural_form=None):
     return f'{count} {singular if count == 1 else plural_form or singular + "s"}'
 
 
+def review_date(value):
+    return parse_timestamp(value).astimezone(timezone.utc).strftime('%d %b %Y, %H:%M UTC').lstrip('0')
+
+
 def client_report_data(run, scores):
     # Data is passed through, not edited. Repeated narrative cannot safely be
     # semantically rewritten by a deterministic renderer.
@@ -90,9 +95,9 @@ def report_model(run, scores=None):
     actions, verification, context = [], [], []
     for index, finding in enumerate(findings, 1):
         item = {'finding': finding, 'anchor': f'finding-{index}'}
-        if finding['kind'] in {'unknown', 'hypothesis'} or finding['status'] == 'unknown':
+        if disposition(finding) == 'verification':
             verification.append(item)
-        elif finding['severity'] == 'informational' or finding['status'] == 'not_applicable':
+        elif disposition(finding) == 'context':
             context.append(item)
         else:
             actions.append(item)
@@ -144,6 +149,8 @@ def render_client_html(data, author='GEO Audit', domain='', content_lang=None):
         raise ValueError('Content language must be a BCP 47 tag such as el or pt-BR')
     report = _ClientReport(data['run'], data['scores'], author, domain, content_lang)
     report.delivery = data.get('delivery', {'state': 'draft'})
+    report.tracking = data.get('action_tracking')
+    report.comparison = data.get('comparison')
     html = '\n'.join(report.parts())
     check_report_integrity(html, report.run, report.model)
     return html
@@ -210,7 +217,8 @@ class _ClientReport:
         self.browser_observations = latest_browser_observations(run)
 
     def parts(self):
-        return (self.head() + self.decision_summary() + self.action_plan() + self.contents()
+        return (self.head() + self.decision_summary() + self.what_changed() + self.action_plan()
+                + self.action_tracking() + self.contents()
                 + self.findings() + self.category_reviews() + self.collection_conditions()
                 + self.outstanding() + self.method())
 
@@ -330,8 +338,8 @@ class _ClientReport:
         actions = self.model['actions']
         parts = ['<section class="decision" id="actions"><h2>Prioritised action plan</h2>',
                  paragraph('Short action previews link to the full evidence and completion checks. Order follows '
-                           'recorded severity. Effort and ownership need scoping; the saved audit contains no '
-                           'estimates.', 'intro')]
+                           'recorded severity. ' + ('Assigned ownership and estimates appear in Action tracking.'
+                           if self.tracking else 'Effort and ownership need scoping; the saved audit contains no estimates.'), 'intro')]
         if actions:
             parts.append('<table class="actions"><caption>Supported improvements</caption><thead><tr>'
                          '<th scope="col">Priority</th><th scope="col">Action and evidence</th>'
@@ -361,8 +369,97 @@ class _ClientReport:
         parts.append('</section>')
         return parts
 
+    def what_changed(self):
+        if not self.comparison:
+            return []
+        comparison = self.comparison
+        parts = ['<section id="what-changed"><h2>What changed</h2>',
+                 paragraph('Compared with the audit dated ' + comparison['previous_date'] + ' using matching scope and rubric.'),
+                 paragraph(' · '.join(f'{count} {name}' for name, count in comparison['counts'].items()), 'coverage')]
+        score = comparison['scores']['overall']
+        if score['change'] is None:
+            parts.append(paragraph('Overall score change withheld because one or both audits have incomplete core scores.'))
+        else:
+            parts.append(paragraph(f"Core score: {score['previous']:g} → {score['current']:g} "
+                                   f"({score['change']:+g} points). This is an editorial readiness comparison."))
+        for key, title in (('new', 'New findings'), ('recurring', 'Recurring findings'),
+                           ('resolved', 'Resolved with evidence'), ('unresolved', 'Unresolved or awaiting verification')):
+            rows = comparison['groups'][key]
+            parts.append(f'<h3>{title}</h3>')
+            if not rows:
+                parts.append(paragraph('None recorded.'))
+            for row in rows:
+                finding, proof = row['finding'], row['verification']
+                parts += ['<article class="change-item">', self.prose_paragraph(finding['claim']),
+                          paragraph(row['reason'], 'scope'), self.page_scope(finding['affected_urls'])]
+                if proof:
+                    parts += [paragraph(f"Reviewed by {proof['reviewer']} ({proof['reviewer_type']}) · {review_date(proof['reviewed_at'])}"),
+                              paragraph(proof['rationale']), self.prose_paragraph('Acceptance check: ' + finding['acceptance'])]
+                parts.append('</article>')
+        before, after = (comparison['coverage'][name] for name in ('previous', 'current'))
+        parts += [paragraph(f"Detailed topic coverage: {before['assessed']} assessed previously; "
+                            f"{after['assessed']} assessed now. Unrecorded topics remain outstanding.")]
+        conditions = comparison.get('capture_conditions', [])
+        if conditions:
+            parts += ['<div class="comparison-conditions"><h3>Collection conditions in both audits</h3>',
+                      paragraph('Changes to collection settings can change what is observed without a website change.', 'limit'),
+                      '<table><thead><tr><th scope="col">Page and viewport</th><th scope="col">Previous</th>'
+                      '<th scope="col">Current</th></tr></thead><tbody>']
+            def describe(value):
+                if not value:
+                    return 'No saved browser condition'
+                if value['selector'] is None:
+                    return 'Unconfigured; ' + str(value['status'] or 'not recorded')
+                return (f"{value['selector']} ≥ {value['min_count']}; {value['status']}; "
+                        f"timeout {value['timeout_ms']} ms; settling {value['settle_ms']} ms")
+            for condition in conditions:
+                parts.append('<tr><td>' + safe_link(self.labels[condition['url']], condition['url'])
+                             + ' · ' + escape(condition['viewport']) + '</td><td>'
+                             + escape(describe(condition['previous'])) + '</td><td>'
+                             + escape(describe(condition['current'])) + '</td></tr>')
+            parts.append('</tbody></table></div>')
+        parts += [
+                  paragraph(comparison['matching'], 'limit'), paragraph(comparison['verification_limit'], 'limit'),
+                  paragraph(comparison['limitation'], 'limit'), '</section>']
+        return parts
+
+    def action_tracking(self):
+        if not self.tracking:
+            return []
+        tasks = self.tracking['tasks']
+        parts = ['<section id="action-tracking"><h2>Action tracking</h2>',
+                 paragraph('Completion means ready to verify. Verification requires fresh captures and a separate named '
+                           'review against the acceptance check. Estimates are planning inputs; they do not change scores.')]
+        if not tasks:
+            parts.append(paragraph('No supported improvement actions in the saved baseline.'))
+        labels = {'planned': 'Planned', 'in_progress': 'In progress', 'ready_to_verify': 'Ready to verify', 'verified': 'Verified'}
+        for task in tasks.values():
+            finding, proof = task['finding'], task['verification']
+            state = labels[task['status']]
+            if task['status'] == 'verified' and proof['run_sha256'] != self.tracking['current_run_sha256']:
+                state += ' in another snapshot; not verified for this report'
+            effort = f"{task['effort_hours']:g} hours" if task['effort_hours'] is not None else 'Not estimated'
+            parts += ['<article class="tracked-action">', f'<h3>{escape(finding["claim"])}</h3>',
+                      paragraph(f"{state} · Owner: {task['owner'] or 'Unassigned'} · Effort: {effort}"),
+                      self.prose_paragraph('Action: ' + finding['fix']),
+                      self.prose_paragraph('Acceptance check: ' + finding['acceptance']),
+                      self.page_scope(finding['affected_urls'])]
+            if task['depends_on']:
+                parts.append(paragraph('Depends on: ' + '; '.join(tasks[dep]['finding']['claim'] for dep in task['depends_on'])))
+            if proof:
+                parts += [paragraph(f"Last review: {proof['result']} · {proof['reviewer']} ({proof['reviewer_type']}) · {review_date(proof['reviewed_at'])}"),
+                          paragraph(proof['rationale'])]
+            parts.append('</article>')
+        parts += [paragraph('Assignments and review outcomes are recorded in the saved action history. '
+                            'Reviewer names are self-declared.', 'limit'), '</section>']
+        return parts
+
     def contents(self):
         entries = [('Findings and evidence', 'findings')]
+        if self.comparison:
+            entries.insert(0, ('What changed', 'what-changed'))
+        if self.tracking:
+            entries.insert(0, ('Action tracking', 'action-tracking'))
         entries += [(name, 'category-' + key) for key, name in CATEGORY_NAMES.items()]
         entries += [('Outstanding checks and limitations', 'outstanding'), ('Scope and scoring method', 'method')]
         if self.browser_observations:
@@ -564,4 +661,5 @@ CLIENT_CSS = """
 # Compact methodology without shrinking the substantive findings or losing URLs.
 CLIENT_CSS += """
 @media print{#method{padding:16px 0}#method p{margin:6px 0;break-inside:avoid}#method table{margin:10px 0;font-size:9pt}#method th,#method td{padding:7px 8px}#method h3{margin:16px 0 10px}#method .sample li{margin:3px 0}.reviewed-pages,.capture-condition{break-inside:avoid}}
+@media print{.comparison-conditions>h3,.comparison-conditions>p{break-after:avoid}}
 """

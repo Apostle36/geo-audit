@@ -78,6 +78,28 @@ class RealRender(unittest.TestCase):
         pdf.export_report(source, technical, technical=True)
         self.assertIn('page-1', self.text(technical))
 
+    def test_action_tracking_and_verified_comparison_pdf(self):
+        from actions import initialise, update
+        from test_actions import baseline, followup, passed
+        from test_delivery import raw
+        before = baseline()
+        previous, current, store = self.directory / 'previous.json', self.directory / 'current.json', self.directory / 'actions'
+        previous.write_bytes(raw(before))
+        initialise(previous.read_bytes(), store)
+        update(store, 'F1', owner='Synthetic owner', effort_hours=2.5, status='ready_to_verify')
+        after = followup(before)
+        current.write_bytes(raw(after))
+        passed(store, 'F1', after)
+        output = self.directory / 'comparison.pdf'
+        pdf.export_report(current, output, previous_path=previous, actions_path=store)
+        text = self.text(output)
+        for marker in ('What changed', '1 resolved', 'Action tracking', 'Synthetic owner', '2.5 hours',
+                       before['findings'][0]['acceptance'], 'Codex (agent)', 'DRAFT'):
+            self.assertIn(marker, text)
+        self.assertNotIn('page-1', text)
+        self.assertEqual(previous.read_bytes(), raw(before))
+        self.assertEqual(current.read_bytes(), raw(after))
+
     def test_draft_and_reviewed_final_pdf_states(self):
         from delivery import approve
         from test_delivery import complete_run

@@ -52,6 +52,8 @@ def install(directory, *, source_root=None, keep_backups=KEEP_BACKUPS):
                 root / 'scripts/collect.py', root / 'scripts/new_run.py',
                 root / 'scripts/audit.py', root / 'scripts/delivery.py', root / 'scripts/browser_collect.py',
                 root / 'scripts/browser_runtime.py', root / 'scripts/capture_readiness.py', root / 'docs/WORKFLOW.md',
+                root / 'scripts/actions.py', root / 'scripts/finding_identity.py', root / 'scripts/compare_runs.py',
+                root / 'scripts/report_context.py', root / 'docs/ACTIONS.md',
                 root / 'docs/AUDIT-DEPTH.md', root / 'docs/CLIENT-REPORT.md']
     roles = ["geo-ai-visibility", "brand-radar", "geo-technical", "geo-content", "geo-schema", "geo-platform-analysis"]
     required += [agents / f"{role}.md" for role in roles]
@@ -73,7 +75,7 @@ def install(directory, *, source_root=None, keep_backups=KEEP_BACKUPS):
             shutil.copytree(root / "scripts", stage / "scripts", ignore=shutil.ignore_patterns("__pycache__"))
             (stage / "docs").mkdir()
             shutil.copy2(root / "docs/RUN-FORMAT.md", stage / "docs/RUN-FORMAT.md")
-            for name in ('AUDIT-DEPTH.md', 'CLIENT-REPORT.md', 'WORKFLOW.md'):
+            for name in ('AUDIT-DEPTH.md', 'CLIENT-REPORT.md', 'WORKFLOW.md', 'ACTIONS.md'):
                 shutil.copy2(root / 'docs' / name, stage / 'docs' / name)
             hashes = {str(path.relative_to(stage)): hashlib.sha256(path.read_bytes()).hexdigest()
                       for path in stage.rglob("*") if path.is_file()}

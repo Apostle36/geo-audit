@@ -26,7 +26,8 @@ class InstallContract(unittest.TestCase):
             for resource in ('docs/AUDIT-DEPTH.md', 'docs/CLIENT-REPORT.md', 'docs/WORKFLOW.md',
                              'scripts/client_report.py', 'scripts/review_topics.py', 'scripts/audit.py',
                              'scripts/delivery.py', 'scripts/browser_collect.py', 'scripts/browser_runtime.py',
-                             'scripts/capture_readiness.py'):
+                             'scripts/capture_readiness.py', 'scripts/actions.py', 'scripts/finding_identity.py',
+                             'scripts/compare_runs.py', 'scripts/report_context.py', 'docs/ACTIONS.md'):
                 self.assertIn(resource, manifest)
             for name, digest in manifest.items():
                 self.assertEqual(hashlib.sha256((destination / name).read_bytes()).hexdigest(), digest)

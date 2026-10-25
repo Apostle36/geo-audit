@@ -1,7 +1,7 @@
 ---
 name: geo-audit
 metadata:
-  version: "1.5.1"
+  version: "1.6.0"
 description: Website GEO and SEO readiness audit with saved evidence, explicit uncertainty, and optional measured AI visibility.
 ---
 
@@ -11,6 +11,8 @@ Assess the supplied website. Readiness is an editorial assessment, not a predict
 Deliver a comprehensive audit by default, with a readable executive summary AND detailed category findings. A request for simpler language does not authorize reducing audit depth. For a quick review, explicitly label the reduced scope. This skill does not edit the audited site, deploy, buy services or publish client information without authorization.
 
 ## Resources and preflight
+Read docs/ACTIONS.md for post-audit work. Use a separate action journal for owner, effort, dependencies and status; marking done queues verification. A named review against fresh compatible evidence is required for verified status. Declare agent reviews as agent reviews. Missing findings alone are unresolved. Use --compare/--actions for the What changed and action tracking report sections; final approval must bind that complete context. Never rewrite the baseline to update task status.
+
 Read docs/WORKFLOW.md for the resumable CLI. Prefer `scripts/audit.py start/sample/resume/status` when collecting a new audit. Browser collection is opt-in with `--browser`; it captures desktop/mobile DOM, screenshots and lab timings without assigning scores. It executes public JavaScript under the documented local-tool limits. Failed and unavailable steps remain visible; use `resume --retry-failed` to preserve prior attempts and append new evidence without rewriting findings.
 
 Configure `--ready-selector`, `--ready-min-count` and a bounded `--ready-timeout-ms` when expected document content is known. Without a condition, readiness is unverified. A saved snapshot can have a timed-out content condition: inspect it and retry explicitly rather than treating it as complete. Preserve the condition and original timing evidence. Discovery now inspects one starting page for bounded navigation candidates if sitemaps yield none; reuse that capture and its original bytes when selected. The workflow enforces the distinct-page budget including this seed. Read the report's capture conditions, mobile layout caveats and blocked resources before drawing conclusions.

@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from pathlib import Path
+import re
 
 from evidence import parse_timestamp, strict_json
 from review_topics import TOPICS
@@ -77,10 +78,19 @@ def readiness(run, *, exclusions=None, acknowledgements=None):
             'exclusions': exclusions, 'acknowledgements': acknowledgements}
 
 
-def validate_approval(raw, approval):
-    fields(approval, {'version', 'run_sha256', 'reviewer', 'reviewed_at', 'exclusions', 'acknowledgements'}, 'Approval')
-    if approval['version'] != APPROVAL_VERSION:
+def validate_approval(raw, approval, *, attachments=None):
+    contextual = isinstance(approval, dict) and approval.get('version') == '1.1.0'
+    required = {'version', 'run_sha256', 'reviewer', 'reviewed_at', 'exclusions', 'acknowledgements'}
+    fields(approval, required | ({'attachments'} if contextual else set()), 'Approval')
+    if not isinstance(approval['version'], str) or approval['version'] not in {APPROVAL_VERSION, '1.1.0'}:
         raise ValueError('Unsupported approval version')
+    attachments = attachments or {}
+    if attachments != approval.get('attachments', {}):
+        raise ValueError('Report attachments changed after review; review the complete report context again.')
+    if (not isinstance(attachments, dict) or set(attachments) - {'previous_run_sha256', 'actions_sha256'}
+            or any(not isinstance(value, str) or not re.fullmatch(r'[0-9a-f]{64}', value)
+                   for value in attachments.values())):
+        raise ValueError('Invalid report attachment hashes')
     if approval['run_sha256'] != digest(raw):
         raise ValueError('The run changed after review; review this snapshot again.')
     if not isinstance(approval['reviewer'], str) or not approval['reviewer'].strip():
@@ -95,11 +105,13 @@ def validate_approval(raw, approval):
             'exclusions': approval['exclusions'], 'acknowledgements': approval['acknowledgements']}
 
 
-def approve(raw, reviewer, *, exclusions=None, acknowledgements=None):
-    approval = {'version': APPROVAL_VERSION, 'run_sha256': digest(raw), 'reviewer': reviewer,
+def approve(raw, reviewer, *, exclusions=None, acknowledgements=None, attachments=None):
+    approval = {'version': '1.1.0' if attachments else APPROVAL_VERSION, 'run_sha256': digest(raw), 'reviewer': reviewer,
                 'reviewed_at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
                 'exclusions': exclusions or {}, 'acknowledgements': acknowledgements or {}}
-    validate_approval(raw, approval)
+    if attachments:
+        approval['attachments'] = attachments
+    validate_approval(raw, approval, attachments=attachments)
     return approval
 
 
@@ -125,17 +137,25 @@ def main():
     review.add_argument('--output', type=Path, help='Default: delivery.json beside the run; existing approvals are preserved')
     review.add_argument('--exclude', action='append', default=[], metavar='CHECK=reason')
     review.add_argument('--acknowledge', action='append', default=[], metavar='WARNING=reason')
+    from report_context import add_arguments, prepare, protect_output
+    for command in (check, review):
+        add_arguments(command)
     args = parser.parse_args()
     try:
         raw = args.run.read_bytes()
+        _, attachments = prepare(raw, previous=args.compare, actions=args.actions)
         if args.command == 'approve':
             approval = approve(raw, args.reviewer, exclusions=assignments(args.exclude),
-                               acknowledgements=assignments(args.acknowledge))
+                               acknowledgements=assignments(args.acknowledge), attachments=attachments)
             output = args.output or args.run.with_name('delivery.json')
+            from safe_io import check_output
+            check_output(args.run, output)
+            protect_output(output, previous=args.compare, actions=args.actions)
             write_new(output, (json.dumps(approval, indent=2, ensure_ascii=False) + '\n').encode())
             print(json.dumps({'state': 'ready', 'approval': str(output)}, indent=2))
         elif args.approval:
-            print(json.dumps(validate_approval(raw, strict_json(args.approval.read_text(encoding='utf-8'))), indent=2))
+            print(json.dumps(validate_approval(raw, strict_json(args.approval.read_text(encoding='utf-8')),
+                                              attachments=attachments), indent=2))
         else:
             result = readiness(strict_json(raw.decode('utf-8')))
             print(json.dumps({'state': 'draft', **result}, indent=2))

@@ -285,7 +285,7 @@ def browser_arguments(config):
             'ready_timeout_ms': condition['timeout_ms'], 'settle_ms': condition['settle_ms']}
 
 
-def status(root, *, approval_path=None):
+def status(root, *, approval_path=None, previous_path=None, actions_path=None):
     config = configuration(root)
     selection = sample(root)
     discovery = cached(root, 'discovery')
@@ -319,6 +319,9 @@ def status(root, *, approval_path=None):
     else:
         raw = (root / 'run.json').read_bytes()
         run = strict_json(raw.decode('utf-8'))
+        from report_context import prepare
+        context, attachments = prepare(raw, previous=previous_path, actions=actions_path)
+        result.update(context)
         sync_run(root, config, selection, [])
         registry = {item['id']: item for item in run['assessment']['evidence']}
         unsynced = []
@@ -332,7 +335,7 @@ def status(root, *, approval_path=None):
         if approval.exists():
             try:
                 reviewed = read(approval)
-                result['approval'] = validate_approval(raw, reviewed)
+                result['approval'] = validate_approval(raw, reviewed, attachments=attachments)
                 result['delivery'] = readiness(strict_json(raw.decode('utf-8')), exclusions=reviewed['exclusions'],
                                                acknowledgements=reviewed['acknowledgements'])
                 result.update(stage='ready', next='Export the reviewed report with export --final.')
@@ -345,15 +348,17 @@ def status(root, *, approval_path=None):
     return result
 
 
-def export(root, output, *, final=False, approval=None, content_lang=None, overwrite=False):
+def export(root, output, *, final=False, approval=None, content_lang=None, overwrite=False,
+           previous_path=None, actions_path=None):
     configuration(root)
-    if final and status(root, approval_path=approval)['stage'] != 'ready':
+    if final and status(root, approval_path=approval, previous_path=previous_path, actions_path=actions_path)['stage'] != 'ready':
         raise ValueError('Finish collection and approve the current run before exporting a final workflow report')
     spec = importlib.util.spec_from_file_location('geo_report_export', Path(__file__).with_name('geo-audit-pdf.py'))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     module.export_report(root / 'run.json', output, final=final, approval_path=approval,
-                         content_lang=content_lang, overwrite=overwrite)
+                         content_lang=content_lang, overwrite=overwrite,
+                         previous_path=previous_path, actions_path=actions_path)
     return {'saved': str(output), 'state': 'ready' if final else 'draft'}
 
 
@@ -387,6 +392,14 @@ def main():
     report.add_argument('--approval', type=Path)
     report.add_argument('--content-lang')
     report.add_argument('--overwrite', action='store_true')
+    from report_context import add_arguments, protect_output
+    add_arguments(report)
+    add_arguments(progress)
+    comparison = commands.add_parser('compare', help='Compare compatible runs; missing findings still need verification')
+    comparison.add_argument('directory', type=Path)
+    comparison.add_argument('--previous', type=Path, required=True)
+    comparison.add_argument('--actions', type=Path)
+    comparison.add_argument('--output', type=Path)
     args = parser.parse_args()
     root = args.directory.absolute()
     try:
@@ -424,10 +437,21 @@ def main():
                 elif args.command == 'resume':
                     result = resume(root, retry_failed=args.retry_failed)
                 elif args.command == 'status':
-                    result = status(root, approval_path=args.approval)
+                    result = status(root, approval_path=args.approval, previous_path=args.compare, actions_path=args.actions)
+                elif args.command == 'compare':
+                    from actions import load
+                    from compare_runs import compare
+                    result = compare((root / 'run.json').read_bytes(), args.previous.read_bytes(),
+                                     action_state=load(args.actions) if args.actions else None)
+                    if args.output:
+                        from safe_io import check_output
+                        check_output(root / 'run.json', args.output)
+                        protect_output(args.output, previous=args.previous, actions=args.actions)
+                        write_new(args.output, dump(result))
                 else:
                     result = export(root, args.output, final=args.final, approval=args.approval,
-                                    content_lang=args.content_lang, overwrite=args.overwrite)
+                                    content_lang=args.content_lang, overwrite=args.overwrite,
+                                    previous_path=args.compare, actions_path=args.actions)
         print(json.dumps(result, indent=2, ensure_ascii=False))
     except (ValueError, OSError) as exc:
         parser.exit(2, f'Audit workflow failed: {exc}\n')
@@ -435,6 +459,8 @@ def main():
         print(f'\nAudit interrupted. Completed checkpoints are preserved. Resume with:\n'
               f'  python scripts/audit.py resume {shlex.quote(str(root))}', file=sys.stderr)
         return 130
+    if result.get('comparable') is False:
+        return 3
     return 4 if result.get('content_readiness', {}).get('timeout') else 0
 
 

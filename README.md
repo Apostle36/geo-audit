@@ -1,5 +1,5 @@
 # GEO Audit
-Version 1.5.1: bounded browser content checks, navigation discovery and clearer reports. This is a local agent-assisted toolkit, not a SaaS or live AI-visibility tracker.
+Version 1.6.0: action tracking, fresh-evidence verification and compatible audit comparisons. This is a local agent-assisted toolkit, not a SaaS or live AI-visibility tracker.
 
 The audit covers 34 detailed topics across five areas, with business-specific
 guidance, page-level findings, strengths, missing checks and an action plan.
@@ -23,6 +23,12 @@ python3 -m venv .venv
 The installer bundles instructions, role definitions, scripts, rubric and format documentation into geo-audit/. It stages a complete package and preserves prior customisations in .backups/, keeping the five newest (`--keep-backups N` to change). Obsolete active files are removed from the new package, but remain in the backup. Atomic upgrades require Linux renameat2; unsupported systems fail without changing the prior install. Global role conflicts are reported, never overwritten. The orchestrator must explicitly read the bundled role files. Restart/reload the agent session after installing. This source update does not automatically update existing global installations.
 
 ## Run
+For post-audit assignments and follow-ups, see [Action tracking and comparisons](docs/ACTIONS.md).
+Owners, effort, dependencies and verification history stay separate from the
+original run. “Done” queues verification. “Resolved” requires a passing named
+review of fresh evidence bound to the exact follow-up. Reports gain an optional
+“What changed” section; final approvals bind that context as well as the run.
+
 For a guided local workflow, see [start, sample, resume, review and deliver](docs/WORKFLOW.md):
 
 ```sh
