@@ -1,6 +1,6 @@
 # Guided local audit workflow
 
-Toolkit 1.5.1 provides a resumable CLI, optional browser evidence and reviewed final
+Toolkit 1.7.0 provides a resumable CLI, optional browser evidence and reviewed final
 exports. Run schema 1.4.0 and immutable score rubric 1.2.0 are unchanged. Existing
 helper commands and historical runs remain supported.
 
@@ -44,6 +44,16 @@ Successful pages are reused. A workspace lock rejects concurrent writers.
 Status lists progress, retryable steps, delivery blockers and the next action.
 Progress goes to stderr; final stdout is JSON.
 
+A `success` step means only that a response was saved. Status therefore also
+lists each sampled page with its HTTP status and capture prompts (`pages`,
+`pages_needing_review`): error responses, unfollowed redirects, possible bot
+challenges or "not found" pages, non-HTML bodies, unmet content checks and
+little visible text. Inspect prompted captures before analysis. Replace the
+page in a new audit, retry, or record the dependent checks as unknown. Prompts
+are heuristics for review, not findings. Sample URLs may contain non-ASCII
+paths; the collectors percent-encode them as UTF-8 on the request line, as
+browsers do, while evidence keeps the URL as supplied.
+
 ```sh
 python scripts/audit.py resume /absolute/path/new-audit --retry-failed
 ```
@@ -86,6 +96,14 @@ observation of that partial state; the separate readiness value records the
 unmet condition. Standalone browser collection and workflow start/resume/status
 exit 4 when a configured condition times out. Retry explicitly with
 `resume --retry-failed`; earlier observations and analyst text are preserved.
+
+Each observation runs in a separate worker process group with a 180-second
+hard deadline. Playwright cannot time out DOM reads, so a page whose JavaScript
+blocks its main thread would otherwise hang the audit with the workspace lock
+held. At the deadline the worker and its browser are killed and the step is
+saved as a failed, retryable observation. The worker re-reads robots.txt; the
+collector's one-second spacing is kept across the process boundary.
+`browser_collect.py --in-process` runs without the worker and its deadline.
 
 Each URL gets separate desktop (1440×900) and mobile (390×844) fresh Chromium
 contexts. Successful observations save rendered.html, viewport.png,

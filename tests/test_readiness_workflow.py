@@ -48,7 +48,7 @@ class ReadinessWorkflow(unittest.TestCase):
                 result['log']['content_readiness']={'status':'timeout' if len(calls)<=2 else 'met'}
                 return result
             with patch('audit.collect_discovery',side_effect=discovery), patch('audit.collect_http',side_effect=http), \
-                    patch('audit.browser_collect.capture',side_effect=browser):
+                    patch('audit.browser_collect.capture_isolated',side_effect=browser):
                 first=audit.resume(root)
                 self.assertEqual(first['content_readiness']['timeout'],2)
                 self.assertEqual(len(first['retryable_steps']),2)

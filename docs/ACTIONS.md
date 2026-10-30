@@ -1,4 +1,4 @@
-# Action tracking and audit comparisons (toolkit 1.6.0)
+# Action tracking and audit comparisons (toolkit 1.6.0+)
 
 `run.json` remains an evidence snapshot. Action assignments, estimates,
 dependencies and review outcomes live in a separate local journal. These
@@ -58,7 +58,10 @@ Declare `--reviewer-type agent` when an agent performed the review. Never record
 a human attestation on someone's behalf. `passed` marks verified; `failed`
 returns to in progress; `inconclusive` remains ready to verify. A passing review
 is rejected if the issue remains in the follow-up or its ID is reused for a
-different issue. The named reviewer is responsible for judging whether the
+different issue. The review output lists `capture_prompts` for cited
+evidence such as an error response. They are reported, not refused, because an
+error can be the agreed outcome (for example a retired page now returning 404);
+the client report repeats them beside the resolved item. The named reviewer is responsible for judging whether the
 evidence actually satisfies the acceptance check; the CLI validates integrity,
 scope and freshness, not factual or semantic truth.
 

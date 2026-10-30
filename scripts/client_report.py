@@ -9,6 +9,7 @@ from urllib.parse import urlsplit, unquote
 from review_topics import TOPICS, CATEGORY_NAMES, CRITERION_NAMES
 from version import TOOLKIT_VERSION
 from evidence import document_title, parse_timestamp
+from capture_quality import page_summary, review_prompts
 from capture_readiness import latest_browser_observations
 from finding_identity import disposition
 
@@ -205,7 +206,9 @@ class _ClientReport:
         self.readable_date = date.fromisoformat(self.meta['date']).strftime('%d %B %Y').lstrip('0')
         self.assessed = sum(x['status'] == 'assessed' for x in run.get('review', []))
         self.total = sum(len(t) for t in TOPICS.values())
-        titles = {}
+        self.pages = page_summary(self.meta['sample'], run['assessment']['evidence'])
+        # An error or challenge page's title ("Just a moment...") would mislabel the requested page.
+        titles = {page['url']: None for page in self.pages if not page['title_usable']}
         for record in run['assessment']['evidence']:
             if record['source'] in self.sample and record['source'] not in titles and record['status'] == 'success':
                 dom = record['content'].partition('\n\nRendered DOM:\n')
@@ -219,8 +222,8 @@ class _ClientReport:
     def parts(self):
         return (self.head() + self.decision_summary() + self.what_changed() + self.action_plan()
                 + self.action_tracking() + self.contents()
-                + self.findings() + self.category_reviews() + self.collection_conditions()
-                + self.outstanding() + self.method())
+                + self.findings() + self.category_reviews() + self.capture_quality()
+                + self.collection_conditions() + self.outstanding() + self.method())
 
     # Shared fragments
 
@@ -315,13 +318,14 @@ class _ClientReport:
                   paragraph(f"{plural(len(self.model['outstanding']), 'detailed check')} "
                             f"{'remains' if len(self.model['outstanding']) == 1 else 'remain'} unresolved or "
                             'unrecorded. Counts describe review coverage, not website quality.'),
+                  self.capture_summary(),
                   '</div>',
                   paragraph('AI visibility not measured by this report. These findings concern website readiness; '
                             'they do not predict citations, traffic or revenue.', 'limit'),
                   paragraph(score_note, 'limit'),
                   '</section>']
         if self.delivery['state'] == 'ready':
-            details = [paragraph(f"Reviewed by {self.delivery['reviewer']} · {self.delivery['reviewed_at']}")]
+            details = [paragraph(f"Reviewed by {self.delivery['reviewer']} · {review_date(self.delivery['reviewed_at'])}")]
             if self.delivery['exclusions']:
                 details.append('<h3>Agreed scope exclusions</h3><ul>' + ''.join(
                     f'<li>{escape(delivery_check_label(key))}: {escape(reason)}</li>'
@@ -395,6 +399,11 @@ class _ClientReport:
                 if proof:
                     parts += [paragraph(f"Reviewed by {proof['reviewer']} ({proof['reviewer_type']}) · {review_date(proof['reviewed_at'])}"),
                               paragraph(proof['rationale']), self.prose_paragraph('Acceptance check: ' + finding['acceptance'])]
+                    prompts = review_prompts(proof['evidence_ids'], self.registry)
+                    if prompts:
+                        parts.append(paragraph('Capture prompts in the reviewed evidence: ' + '; '.join(prompts)
+                                               + '. The reviewer judged the acceptance check against these captures.',
+                                               'limit'))
                 parts.append('</article>')
         before, after = (comparison['coverage'][name] for name in ('previous', 'current'))
         parts += [paragraph(f"Detailed topic coverage: {before['assessed']} assessed previously; "
@@ -461,7 +470,8 @@ class _ClientReport:
         if self.tracking:
             entries.insert(0, ('Action tracking', 'action-tracking'))
         entries += [(name, 'category-' + key) for key, name in CATEGORY_NAMES.items()]
-        entries += [('Outstanding checks and limitations', 'outstanding'), ('Scope and scoring method', 'method')]
+        entries += [('How each page was captured', 'capture-quality'),
+                    ('Outstanding checks and limitations', 'outstanding'), ('Scope and scoring method', 'method')]
         if self.browser_observations:
             entries.insert(-2, ('Browser capture conditions', 'capture-conditions'))
         return (['<nav id="contents" aria-label="Report contents"><h2>In this report</h2><ul>']
@@ -533,6 +543,50 @@ class _ClientReport:
         parts += [f'<li{self.lang}>{escape(x)}</li>' for x in self.run['limitations']]
         parts.append('</ul></section>')
         return parts
+
+    def capture_summary(self):
+        flagged = [page for page in self.pages if page['attention']]
+        link = jump('How each page was captured', 'capture-quality')
+        if not flagged:
+            return ('<p>Automatic capture checks raised no prompts for the sampled pages; this does not confirm '
+                    f'complete or correct content. {link}.</p>')
+        examples = list(dict.fromkeys(kind for page in flagged for kind in page['kinds']))
+        return (f"<p><strong>Capture quality:</strong> {len(flagged)} of {plural(len(self.pages), 'sampled page')} "
+                f"{'needs' if len(flagged) == 1 else 'need'} review before relying on {'its' if len(flagged) == 1 else 'their'} "
+                f"conclusions ({escape('; '.join(examples[:3]))}{'; …' if len(examples) > 3 else ''}). {link}.</p>")
+
+    def capture_quality(self):
+        states = {'met': 'content check met', 'unverified': 'saved; no content check configured',
+                  'timeout': 'content check timed out', 'not_recorded': 'saved; no content check recorded'}
+        rows = []
+        for page in self.pages:
+            http = page['http']
+            if http['state'] == 'success':
+                response = f"HTTP {http['http_status']}" if http.get('http_status') else 'Saved (format not interpreted)'
+            else:
+                response = {'failed': 'Collection failed', 'unavailable': 'Not collected',
+                            'missing': 'No saved capture', 'other': 'Saved by another method'}[http['state']]
+            described = {viewport: states.get(item['readiness'], 'saved') if item['state'] == 'success'
+                         else {'failed': 'failed', 'unavailable': 'not collected'}[item['state']]
+                         for viewport, item in page['browser'].items()}
+            if len(described) == 2 and len(set(described.values())) == 1:
+                rendered = 'Desktop and mobile: ' + described['desktop']
+            else:
+                rendered = '; '.join(f'{viewport.capitalize()}: {text}' for viewport, text in described.items())
+            rendered = rendered or 'Not collected'
+            rows.append(f'<tr><td data-label="Page">{safe_link(self.labels[page["url"]], page["url"])}</td>'
+                        f'<td data-label="HTTP response">{escape(response)}</td>'
+                        f'<td data-label="Rendered">{escape(rendered)}</td>'
+                        f'<td data-label="Prompts">{escape("; ".join(page["prompts"]) or "None raised")}</td></tr>')
+        return ['<section id="capture-quality"><h2>How each page was captured</h2>',
+                paragraph('Automatic prompts from the saved captures: error responses, unfollowed redirects, possible '
+                          'bot challenges or "not found" pages, non-HTML bodies, unmet content checks and little '
+                          'visible text. A prompt asks for review; it does not establish a defect. No prompt does not '
+                          'establish complete or correct content. Conclusions that rely only on prompted captures need '
+                          'a named reviewer\'s qualification before a final report.', 'intro'),
+                '<table class="captures"><caption>Latest saved capture of each sampled page</caption><thead><tr>'
+                '<th scope="col">Page</th><th scope="col">HTTP response</th><th scope="col">Rendered</th>'
+                '<th scope="col">Review prompts</th></tr></thead><tbody>', *rows, '</tbody></table></section>']
 
     def collection_conditions(self):
         if not self.browser_observations:
@@ -662,4 +716,11 @@ CLIENT_CSS = """
 CLIENT_CSS += """
 @media print{#method{padding:16px 0}#method p{margin:6px 0;break-inside:avoid}#method table{margin:10px 0;font-size:9pt}#method th,#method td{padding:7px 8px}#method h3{margin:16px 0 10px}#method .sample li{margin:3px 0}.reviewed-pages,.capture-condition{break-inside:avoid}}
 @media print{.comparison-conditions>h3,.comparison-conditions>p{break-after:avoid}}
+"""
+
+# Per-page capture table; stacks like the action table on narrow screens.
+CLIENT_CSS += """
+.captures th:nth-child(1){width:27%}.captures th:nth-child(2){width:15%}.captures th:nth-child(3){width:24%}.captures th:nth-child(4){width:34%}
+@media(max-width:600px){.actions caption,.captures caption{display:block;width:auto}.captures thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}.captures,.captures tbody,.captures tr,.captures td{display:block}.captures tr{border-bottom:1px solid var(--border);padding:12px 0}.captures td{border:0;padding:4px 0}.captures td::before{content:attr(data-label) ': ';font-weight:650}}
+@media print{.captures{font-size:9pt}.captures th,.captures td{padding:7px 8px}#capture-quality>h2,#capture-quality>p{break-after:avoid}}
 """

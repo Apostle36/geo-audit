@@ -5,6 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -48,8 +49,80 @@ class BrowserPolicy(unittest.TestCase):
             self.assertIn('install playwright', result['evidence'][0]['content'])
 
 
+class IsolatedObservation(unittest.TestCase):
+    """The worker is replaced by small scripts, so no browser is needed."""
+
+    def run_worker(self, script, deadline):
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / 'grandchild.pid'
+            command = [sys.executable, '-c', script.format(marker=str(marker))]
+            client = Client(delay=0)
+            with patch.object(browser_collect, 'worker_command', return_value=command):
+                started = time.monotonic()
+                result = browser_collect.capture_isolated(client, 'https://example.com/', Path(directory) / 'c',
+                                                          identifier='b1', viewport='mobile', deadline=deadline)
+                elapsed = time.monotonic() - started
+            saved = json.loads((Path(directory) / 'c/result.json').read_text())
+            pid = int(marker.read_text()) if marker.exists() else None
+            return result, saved, elapsed, pid, client
+
+    def test_deadline_kills_the_whole_process_group_and_records_a_failure(self):
+        script = ('import pathlib, subprocess, sys, time\n'
+                  "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+                  "pathlib.Path(r'{marker}').write_text(str(child.pid))\ntime.sleep(60)")
+        result, saved, elapsed, pid, client = self.run_worker(script, deadline=2)
+        self.assertLess(elapsed, 15)
+        self.assertEqual(result, saved)
+        self.assertEqual(result['log']['status'], 'failed')
+        self.assertIn('exceeded the 2-second observation limit', result['evidence'][0]['content'])
+        self.assertTrue(result['evidence'][0]['method'].endswith('(mobile)'))
+        validate_registry(result['evidence'])
+        self.assertIn('example.com', client.last)
+        for _ in range(50):  # The orphaned grandchild is reaped by init shortly after the kill.
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.1)
+        else:
+            self.fail('The worker\'s child process survived the deadline')
+
+    def test_crashed_worker_without_a_result_is_an_explicit_failure(self):
+        result, _, _, _, _ = self.run_worker("import sys; sys.exit('boom: no browser here')", deadline=30)
+        self.assertEqual(result['log']['status'], 'failed')
+        self.assertIn('exited with status 1: boom: no browser here', result['evidence'][0]['content'])
+
+    def test_existing_observation_directory_is_refused_before_starting_a_worker(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(browser_collect.subprocess, 'Popen') as popen, self.assertRaises(FileExistsError):
+            browser_collect.capture_isolated(Client(), 'https://example.com/', Path(directory))
+        popen.assert_not_called()
+
+
 @unittest.skipUnless(os.environ.get('GEO_RUN_RENDER_TESTS') == '1', 'Set GEO_RUN_RENDER_TESTS=1 for actual browser checks')
 class RealBrowserCollection(unittest.TestCase):
+    def test_page_that_blocks_its_main_thread_cannot_hang_the_audit(self):
+        body = b'<!doctype html><title>Busy</title><h1>Hi</h1><script>setTimeout(()=>{while(true){}}, 100)</script>'
+        with serve({'/': (200, {'Content-Type': 'text/html'}, body)}) as (base, _), \
+                tempfile.TemporaryDirectory() as directory:
+            started = time.monotonic()
+            result = browser_collect.capture_isolated(Client(delay=0, allow_private=True, proxies={}), base + '/',
+                                                      Path(directory) / 'busy', deadline=12)
+            self.assertLess(time.monotonic() - started, 30)
+            self.assertEqual(result['log']['status'], 'failed')
+            self.assertIn('12-second observation limit', result['evidence'][0]['content'])
+
+    def test_isolated_observation_matches_the_in_process_result(self):
+        body = b'<!doctype html><title>Plain</title><h1>Customer answer</h1>'
+        with serve({'/': (200, {'Content-Type': 'text/html'}, body)}) as (base, _), \
+                tempfile.TemporaryDirectory() as directory:
+            result = browser_collect.capture_isolated(Client(delay=0, allow_private=True, proxies={}), base + '/',
+                                                      Path(directory) / 'plain', identifier='b9', viewport='mobile')
+            self.assertEqual(result['log']['status'], 'success', result)
+            self.assertEqual(result['evidence'][0]['id'], 'b9')
+            self.assertTrue((Path(directory) / 'plain/viewport.png').is_file())
+            self.assertIn('Customer answer', (Path(directory) / 'plain/rendered.html').read_text())
+
     def test_javascript_dom_both_viewports_and_lab_measurements(self):
         html = b'''<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1">
             <title>Before</title></head><body><h1>Before</h1>

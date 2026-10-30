@@ -220,7 +220,25 @@ class Response:
     @property
     def location(self):
         value = self.header("location")
-        return urljoin(self.url, value) if self.status in REDIRECTS and value else None
+        if self.status not in REDIRECTS or not value:
+            return None
+        # http.client decodes header bytes as Latin-1; percent-encode those raw bytes as browsers do.
+        value = re.sub(r"[\x80-\xff]+", lambda match: quote(match[0].encode("latin-1"), safe=""), value)
+        return urljoin(self.url, value)
+
+
+def request_uri(url):
+    """Percent-encode non-ASCII characters and spaces outside the host as UTF-8, as browsers do.
+
+    Evidence keeps the URL as supplied; only the request line is encoded.
+    """
+    parts = urlsplit(url)
+    encode = lambda text: re.sub(r"[^\x21-\x7e]+", lambda match: quote(match[0], safe=""), text)  # noqa: E731
+    return parts._replace(path=encode(parts.path), query=encode(parts.query), fragment="").geturl()
+
+
+# Well-known and local-use NAT64 prefixes (RFC 6052, RFC 8215) embed an IPv4 destination.
+NAT64 = (ipaddress.ip_network("64:ff9b::/96"), ipaddress.ip_network("64:ff9b:1::/48"))
 
 
 def address_problem(host):
@@ -234,6 +252,10 @@ def address_problem(host):
             return None  # Not resolvable here; a configured proxy may still resolve it.
         addresses = [ipaddress.ip_address(info[4][0].split("%", 1)[0]) for info in infos]
     for address in addresses:
+        if address.version == 6 and any(address in network for network in NAT64):
+            embedded = ipaddress.ip_address(int(address) & 0xFFFFFFFF)
+            if address in NAT64[1] or not embedded.is_global:
+                return f"{host} resolves to {address}, a NAT64 address for the non-public {embedded}"
         if not address.is_global:
             return f"{host} resolves to the non-public address {address}"
     return None
@@ -265,12 +287,17 @@ class Client:
             return address_problem(parts.hostname)
         return None
 
-    def get(self, url):
+    def pause(self, url):
+        """Wait until this host's request spacing permits another request; returns the host."""
         host = urlsplit(url).netloc.lower()
         wait = self.host_delay.get(host, self.delay) - (self.clock() - self.last.get(host, float("-inf")))
         if wait > 0:
             self.sleep(wait)
-        request = urllib.request.Request(url, headers={
+        return host
+
+    def get(self, url):
+        host = self.pause(url)
+        request = urllib.request.Request(request_uri(url), headers={
             "User-Agent": USER_AGENT, "Accept-Encoding": "identity",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.5"})
         started = self.clock()

@@ -418,5 +418,37 @@ class CommandLine(unittest.TestCase):
             self.assertFalse(out.exists())
 
 
+class InternationalAndAddressBoundaries(unittest.TestCase):
+    def test_non_ascii_paths_and_raw_utf8_redirects_are_percent_encoded(self):
+        encoded = '/%D1%83%D1%81%D0%BB%D1%83%D0%B3%D0%B8'  # /услуги
+        raw_location = '/услуги'.encode('utf-8').decode('latin-1')  # Raw UTF-8 bytes on the wire.
+        routes = {encoded: html('Услуги', PROSE), '/old': (301, {'Location': raw_location}, b''),
+                  '/robots.txt': (200, {'Content-Type': 'text/plain'}, b'User-agent: *\nDisallow: /%D1%85\n')}
+        with serve(routes) as (base, server), tempfile.TemporaryDirectory() as directory:
+            client = collect.Client(delay=0, allow_private=True, proxies={})
+            urls = [base + '/услуги', base + '/old', base + '/х']
+            evidence, log = collect.fetch(client, urls, Path(directory))
+        pages = {entry['url']: entry for entry in log['pages']}
+        self.assertEqual(pages[urls[0]]['http_status'], 200)
+        self.assertEqual(pages[urls[1]]['final_url'], base + encoded)
+        self.assertEqual(pages[urls[2]]['status'], 'unavailable')  # Robots rules see the same encoding.
+        self.assertIn(encoded, [path for path, _ in server.requests])
+        self.assertEqual({item['source'] for item in evidence if item['source'] in urls}, set(urls))
+        validate_registry(evidence)
+
+    def test_request_line_never_carries_raw_spaces_or_control_characters(self):
+        self.assertEqual(collect.request_uri('https://example.com/a b?q=ü#frag'),
+                         'https://example.com/a%20b?q=%C3%BC')
+        self.assertEqual(collect.request_uri('https://example.com/x%20y?a=1'), 'https://example.com/x%20y?a=1')
+        self.assertNotIn('\n', collect.request_uri('https://example.com/a\r\nInjected: 1'))
+
+    def test_nat64_embeddings_of_non_public_addresses_are_refused(self):
+        client = collect.Client()
+        for host in ('[64:ff9b::7f00:1]', '[64:ff9b::a9fe:a9fe]', '[64:ff9b::a00:1]', '[64:ff9b:1::808:808]'):
+            with self.subTest(host=host):
+                self.assertIn('NAT64', client.refusal(f'http://{host}/'))
+        self.assertIsNone(client.refusal('http://[64:ff9b::808:808]/'))  # Public 8.8.8.8 stays allowed.
+
+
 if __name__ == '__main__':
     unittest.main()

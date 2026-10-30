@@ -18,6 +18,7 @@ import sys
 from urllib.parse import urlsplit
 
 import browser_collect
+import capture_quality
 import capture_readiness
 import collect
 from delivery import readiness, validate_approval
@@ -269,7 +270,7 @@ def resume(root, *, retry_failed=False):
         if config['browser']:
             for viewport in browser_collect.VIEWPORTS:
                 rendered = checkpoint(root, f'browser-{index:03d}-{viewport}',
-                    lambda out, prefix, url=url, viewport=viewport: browser_collect.capture(
+                    lambda out, prefix, url=url, viewport=viewport: browser_collect.capture_isolated(
                         client, url, out, identifier=prefix, viewport=viewport,
                         **browser_arguments(config)), retry_failed=retry_failed)
                 records.extend(rendered['evidence'])
@@ -299,17 +300,25 @@ def status(root, *, approval_path=None, previous_path=None, actions_path=None):
             names.append(f'http-{index:03d}')
             if config['browser']:
                 names += [f'browser-{index:03d}-{viewport}' for viewport in browser_collect.VIEWPORTS]
+    records = []
     for name in names:
         completed = cached(root, name)
         step = {'step': name, 'status': completed['log']['status'] if completed else 'pending'}
         if name.startswith('browser-') and completed:
             step['content_readiness'] = completed['log'].get('content_readiness', {'status': 'not_recorded'})
         result['steps'].append(step)
+        records += completed['evidence'] if completed else []
     result['content_readiness'] = {state: sum(step.get('content_readiness', {}).get('status') == state
                                             for step in result['steps'])
                                    for state in ('met', 'unverified', 'timeout', 'not_recorded')}
     result['retryable_steps'] = [step['step'] for step in result['steps'] if step['status'] in {'failed', 'unavailable'}
                                 or step.get('content_readiness', {}).get('status') == 'timeout']
+    if selection:
+        # A "success" step only means a response was saved; prompts say whether it shows the page.
+        pages = capture_quality.page_summary(selection['urls'], records)
+        result['pages'] = [{'url': page['url'], 'http_status': page['http'].get('http_status'),
+                            'needs_review': page['attention'], 'prompts': page['prompts']} for page in pages]
+        result['pages_needing_review'] = sum(page['attention'] for page in pages)
     if not discovery and not (root / 'run.json').exists():
         result['next'] = 'Run resume to discover candidate pages.'
     elif selection is None:
@@ -331,6 +340,10 @@ def status(root, *, approval_path=None, previous_path=None, actions_path=None):
                 unsynced.append(name)
         result.update(stage='review', delivery=readiness(run), unsynced_steps=unsynced,
                       next='Review evidence and edit run.json; run delivery.py check, then approve when ready.')
+        if result['pages_needing_review']:
+            result['next'] = (f"{result['pages_needing_review']} sampled page(s) have capture prompts (see pages). "
+                              'Inspect those captures before relying on them; replace the page in a new audit, '
+                              'retry, or record dependent checks as unknown. ' + result['next'])
         approval = Path(approval_path) if approval_path is not None else root / 'delivery.json'
         if approval.exists():
             try:

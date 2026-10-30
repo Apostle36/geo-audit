@@ -200,6 +200,27 @@ class Actions(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertEqual(actions.load(self.store)['event_count'], 1)
 
+    def test_passing_review_reports_prompted_evidence_without_refusing_it(self):
+        # A deliberate 404 can be the accepted fix, so the prompt is shown rather than refused.
+        from collect import METHOD, Response, describe
+        actions.update(self.store, 'F1', status='ready_to_verify')
+        current = followup(self.run)
+        record = current['assessment']['evidence'][0]
+        content = describe(record['source'], [Response(record['source'], 404, 'Not Found',
+                                                       [('Content-Type', 'text/html')])], '<title>Gone</title>', [], '')
+        record.update(method=METHOD, content=content, sha256=actions.digest(content.encode()))
+        path = self.root / 'current.json'
+        path.write_bytes(raw(current))
+        result = subprocess.run([sys.executable, str(ROOT / 'scripts/actions.py'), 'review', str(self.store), 'F1',
+                                 '--run', str(path), '--evidence', 'page-1', '--result', 'passed',
+                                 '--reviewer', 'Named reviewer', '--reviewer-type', 'human',
+                                 '--rationale', 'The retired page now returns 404 as agreed.'],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        output = json.loads(result.stdout)
+        self.assertEqual(output['tasks']['F1']['status'], 'verified')
+        self.assertEqual(output['capture_prompts'], ['https://example.com/: HTTP 404 response'])
+
 
 if __name__ == '__main__':
     unittest.main()
