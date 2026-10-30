@@ -135,7 +135,8 @@ class AuditDepth(unittest.TestCase):
         run['review'] = [dict(category=c, topic=t, status='assessed', summary=f'Reviewed {c} {t}',
             affected_urls=run['metadata']['sample'], evidence_ids=['page-1']) for c, ts in TOPICS.items() for t in ts]
         html = pdf.generate_html(report_data(run))
-        self.assertEqual(html.count('href="https://example.com/"'), 1)
+        # Once in the per-page capture table and once in the reviewed-page inventory, never per topic.
+        self.assertEqual(html.count('href="https://example.com/"'), 2)
 
     def test_technical_preserves_detailed_review(self):
         html = pdf.generate_html(report_data(detailed_run(), technical=True))

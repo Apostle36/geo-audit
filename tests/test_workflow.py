@@ -127,7 +127,7 @@ class Workflow(unittest.TestCase):
             def browser(client, url, output, identifier, viewport, **options):
                 return http(client, url, output, identifier)
             with patch('audit.collect_discovery', side_effect=discovery), patch('audit.collect_http', side_effect=http), \
-                    patch('audit.browser_collect.capture', side_effect=browser) as capture:
+                    patch('audit.browser_collect.capture_isolated', side_effect=browser) as capture:
                 result = audit.resume(root)
                 audit.resume(root)
                 self.assertEqual(capture.call_count, 2)

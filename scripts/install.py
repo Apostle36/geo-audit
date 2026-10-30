@@ -53,7 +53,7 @@ def install(directory, *, source_root=None, keep_backups=KEEP_BACKUPS):
                 root / 'scripts/audit.py', root / 'scripts/delivery.py', root / 'scripts/browser_collect.py',
                 root / 'scripts/browser_runtime.py', root / 'scripts/capture_readiness.py', root / 'docs/WORKFLOW.md',
                 root / 'scripts/actions.py', root / 'scripts/finding_identity.py', root / 'scripts/compare_runs.py',
-                root / 'scripts/report_context.py', root / 'docs/ACTIONS.md',
+                root / 'scripts/report_context.py', root / 'scripts/capture_quality.py', root / 'docs/ACTIONS.md',
                 root / 'docs/AUDIT-DEPTH.md', root / 'docs/CLIENT-REPORT.md']
     roles = ["geo-ai-visibility", "brand-radar", "geo-technical", "geo-content", "geo-schema", "geo-platform-analysis"]
     required += [agents / f"{role}.md" for role in roles]

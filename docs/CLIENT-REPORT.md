@@ -14,6 +14,15 @@ or authenticates page claims. Labels use captured document titles and concise
 URL fallbacks while retaining query distinctions. Compact print spacing in the
 method appendix reduces pagination waste without dropping findings or sources.
 
+Since 1.7.0, "How each page was captured" lists each sampled page once with
+its HTTP status, rendered observations and capture prompts, and the decision
+summary states how many pages need review. A prompt asks for review; it does
+not establish a defect, and no prompt does not establish complete content.
+Conclusions resting only on prompted captures need an acknowledged reviewer
+qualification before a final export, and the report shows that qualification.
+Passing action reviews whose evidence carries prompts say so under "Resolved
+with evidence".
+
 List the complete sampled-page inventory once in the appendix. Do not repeat it
 under every observation. Full-sample observations inherit the report scope;
 partial observations name only the relevant pages in natural language. Keep
