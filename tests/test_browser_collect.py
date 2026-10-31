@@ -7,7 +7,7 @@ from pathlib import Path
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import browser_collect
 from collect import Client
@@ -31,6 +31,36 @@ class BrowserPolicy(unittest.TestCase):
         self.assertIn('redirect limit', policy.reason('https://example.com/', redirects=6))
         policy.reason('https://other.example/')
         self.assertIn('request limit', policy.reason('https://example.com/'))
+
+    def test_only_a_blocked_main_frame_navigation_fails_the_observation(self):
+        class Frame:
+            def __init__(self, parent=None, available=True):
+                self.parent, self.available = parent, available
+
+            @property
+            def parent_frame(self):
+                if not self.available:
+                    raise RuntimeError('Frame for this navigation request is not available')
+                return self.parent
+
+        def routed(frame, url='https://www.google.com/maps/embed?pb=1'):
+            policy = browser_collect.Policy(Client(), 'https://example.com/')
+            request = Mock(url=url, method='GET', redirected_from=None, resource_type='document', frame=frame)
+            request.is_navigation_request.return_value = True
+            route = Mock(request=request)
+            policy.route(route)
+            route.abort.assert_called_once_with()
+            route.fulfill.assert_not_called()
+            return policy
+
+        main = Frame()
+        embedded = routed(Frame(parent=main))
+        self.assertEqual(embedded.blocked, [{'url': 'https://www.google.com/maps/embed?pb=1',
+                                             'reason': 'off-site resource or navigation'}])
+        self.assertIsNone(embedded.navigation_problem)
+        self.assertEqual(routed(main).navigation_problem, 'off-site resource or navigation')
+        # A navigation issued before its frame exists (a popup) is still treated as the page's own.
+        self.assertEqual(routed(Frame(available=False)).navigation_problem, 'off-site resource or navigation')
 
     def test_missing_browser_is_an_explicit_unavailable_capture(self):
         original = builtins.__import__
@@ -180,6 +210,36 @@ class RealBrowserCollection(unittest.TestCase):
                 self.assertEqual(metrics['final_url'], base + '/destination')
                 self.assertEqual(result['evidence'][0]['source'], base + '/start')
                 self.assertTrue(any('redirect blocked' in item['reason'] for item in metrics['blocked_requests']))
+                self.assertEqual(outside.requests, [])
+
+    def test_offsite_iframe_is_blocked_and_recorded_without_failing_the_page(self):
+        with serve({}) as (other, outside):
+            embed = other.replace('127.0.0.1', 'localhost') + '/maps/embed?pb=1'
+            body = (f'<!doctype html><title>Contact</title><h1>Contact us</h1>'
+                    f'<iframe src="{embed}" width="600" height="450"></iframe>').encode()
+            with serve({'/contact': (200, {'Content-Type': 'text/html'}, body)}) as (base, _), \
+                    tempfile.TemporaryDirectory() as directory:
+                output = Path(directory) / 'contact'
+                result = browser_collect.capture(Client(delay=0, allow_private=True, proxies={}),
+                                                 base + '/contact', output)
+                self.assertEqual(result['log']['status'], 'success', result)
+                metrics = json.loads((output / 'measurements.json').read_text())
+                self.assertEqual(metrics['http_status'], 200)
+                self.assertIn({'url': embed, 'reason': 'off-site resource or navigation'}, metrics['blocked_requests'])
+                self.assertIn('<h1>Contact us</h1>', (output / 'rendered.html').read_text())
+                self.assertEqual(outside.requests, [])
+
+    def test_offsite_main_frame_navigation_by_script_still_fails(self):
+        with serve({}) as (other, outside):
+            away = other.replace('127.0.0.1', 'localhost') + '/away'
+            body = (f'<!doctype html><title>Leaving</title><h1>Leaving</h1>'
+                    f'<script>setTimeout(() => {{ location.href = "{away}"; }}, 50)</script>').encode()
+            with serve({'/': (200, {'Content-Type': 'text/html'}, body)}) as (base, _), \
+                    tempfile.TemporaryDirectory() as directory:
+                result = browser_collect.capture(Client(delay=0, allow_private=True, proxies={}), base + '/',
+                                                 Path(directory) / 'leaving')
+                self.assertEqual(result['log']['status'], 'failed', result)
+                self.assertIn('Navigation was blocked: off-site', result['evidence'][0]['content'])
                 self.assertEqual(outside.requests, [])
 
     def test_new_document_redirect_after_preflight_is_blocked_before_fetching_target(self):
