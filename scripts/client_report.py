@@ -8,7 +8,7 @@ import re
 from urllib.parse import urlsplit, unquote
 from review_topics import TOPICS, CATEGORY_NAMES, CRITERION_NAMES
 from version import TOOLKIT_VERSION
-from evidence import document_title, parse_timestamp
+from evidence import parse_timestamp
 from capture_quality import page_summary, review_prompts
 from capture_readiness import latest_browser_observations
 from finding_identity import disposition
@@ -207,13 +207,9 @@ class _ClientReport:
         self.assessed = sum(x['status'] == 'assessed' for x in run.get('review', []))
         self.total = sum(len(t) for t in TOPICS.values())
         self.pages = page_summary(self.meta['sample'], run['assessment']['evidence'])
-        # An error or challenge page's title ("Just a moment...") would mislabel the requested page.
-        titles = {page['url']: None for page in self.pages if not page['title_usable']}
-        for record in run['assessment']['evidence']:
-            if record['source'] in self.sample and record['source'] not in titles and record['status'] == 'success':
-                dom = record['content'].partition('\n\nRendered DOM:\n')
-                titles[record['source']] = document_title(dom[2] if dom[1] else dom[0])
-        self.labels = {url: page_label(url, titles.get(url)) for url in self.sample}
+        # Titles come from the capture each page is reported by, never an error or challenge page
+        # ("Just a moment...", "Too many requests") that would mislabel the requested page.
+        self.labels = {page['url']: page_label(page['url'], page['title']) for page in self.pages}
         labels = list(self.labels.values())
         self.labels = {url: label + (' · ' + page_label(url) if labels.count(label) > 1 else '')
                        for url, label in self.labels.items()}

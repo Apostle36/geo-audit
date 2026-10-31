@@ -105,10 +105,19 @@ class Policy:
             except Exception as exc:
                 reason = f'Resource request failed: {type(exc).__name__}: {exc}'
         if reason:
-            self.block(request.url, reason, request.is_navigation_request())
+            # A blocked iframe (an embedded map or video) is recorded like any other resource;
+            # only a blocked navigation of the observed document fails the observation.
+            self.block(request.url, reason, request.is_navigation_request() and main_frame(request))
             route.abort()
         else:
             route.fulfill(response=response)
+
+
+def main_frame(request):
+    try:
+        return request.frame.parent_frame is None
+    except Exception:  # Playwright has no frame yet for a navigation that creates one, such as a popup.
+        return True
 
 
 def capture(client, url, output, *, identifier='browser-01', viewport='desktop', settle_ms=500,

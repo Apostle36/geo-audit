@@ -10,8 +10,10 @@ Since 1.5.1, browser capture conditions distinguish saved snapshots from met,
 unverified or timed-out expected-content checks. The latest saved observation
 per page/viewport is summarised, with mobile layout and blocked-resource caveats;
 earlier captures stay in technical evidence. This never assigns readiness points
-or authenticates page claims. Labels use captured document titles and concise
-URL fallbacks while retaining query distinctions. Compact print spacing in the
+or authenticates page claims. Labels use the document title of the capture
+each page is reported by (the latest successful HTTP capture, never an error,
+rate-limit or challenge page) and concise URL fallbacks while retaining query
+distinctions. Compact print spacing in the
 method appendix reduces pagination waste without dropping findings or sources.
 
 Since 1.7.0, "How each page was captured" lists each sampled page once with

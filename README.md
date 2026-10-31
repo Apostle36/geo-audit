@@ -162,8 +162,14 @@ Research context: https://arxiv.org/abs/2311.09735. Study results are not guaran
   resolution or a named qualification that the final report shows.
 - `audit.py status` lists each sampled page with its HTTP status and prompts;
   client reports gain "How each page was captured" and a decision-summary line.
+- Client report page labels come from the latest successful HTTP capture, the
+  one the capture table reports. An earlier 429 "Too many requests" capture
+  previously labelled the page after a successful re-capture.
 - Browser observations run in a separate process group with a 180-second hard
   deadline. A page that blocks its main thread previously hung the audit.
+- An off-site iframe, such as an embedded map, is blocked and listed with the
+  other blocked resources; only an off-site navigation of the page itself fails
+  the observation. Pages with such embeds previously could not be observed.
 - Non-ASCII page paths and raw UTF-8 redirect targets are percent-encoded on
   the request line instead of failing; NAT64 addresses of private hosts are refused.
 - `delivery.py approve --acknowledge` accepts warnings whose URLs contain `=`.
