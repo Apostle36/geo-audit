@@ -7,7 +7,7 @@ establishes a healthy or complete page. Only records written by collect.py and
 browser_collect.py are interpreted; other capture methods yield no prompts.
 """
 from collect import Response, flags, visible_text
-from evidence import parse_timestamp, strict_json
+from evidence import document_title, parse_timestamp, strict_json
 
 HTTP_METHOD = 'collect.py '
 BROWSER_METHOD = 'browser_collect.py '
@@ -100,7 +100,8 @@ def browser_observation(record):
         codes.append('thin_render')
     viewport = measurements.get('viewport_name')
     return {'kind': 'browser', 'http_status': status, 'codes': codes,
-            'viewport': viewport if viewport in {'desktop', 'mobile'} else None,
+            # A tuple, so a malformed unhashable value is rejected rather than raising.
+            'viewport': viewport if viewport in ('desktop', 'mobile') else None,
             'readiness': readiness if isinstance(readiness, str) else 'not_recorded',
             'blocked_requests': len(blocked) if isinstance(blocked, list) else 0}
 
@@ -118,6 +119,10 @@ def observe(record):
 
 def degraded(observation):
     return observation is not None and any(code in DEGRADED for code in observation['codes'])
+
+
+def failed(observation):
+    return observation is not None and any(code in FAILURE for code in observation['codes'])
 
 
 def labels(observation, codes=None):
@@ -255,7 +260,8 @@ def page_summary(sample, records):
         attention = (http['state'] not in {'success', 'other'} or http.get('degraded', False)
                      or any(item['state'] != 'success' or item['degraded'] for item in browser.values()))
         pages.append({'url': url, 'http': http, 'browser': browser, 'prompts': prompts, 'kinds': list(seen),
-                      'attention': attention, 'title_usable': not any(code in FAILURE for code in failure_codes(own))})
+                      'attention': attention, 'title_usable': not any(code in FAILURE for code in failure_codes(own)),
+                      'title': page_title(own)})
     return pages
 
 
@@ -272,3 +278,17 @@ def failure_codes(records):
     record = latest([item for item in records if item['status'] == 'success'], HTTP_METHOD)
     observation = observe(record) if record else None
     return observation['codes'] if observation else []
+
+
+def page_title(records):
+    """Title of the capture that names the page, or None when that capture may show an error page.
+
+    The latest successful HTTP capture names the page, as in page_summary, so an earlier rate-limit or
+    challenge page never does. Without one, the latest other successful capture with no failure prompt does.
+    """
+    successful = [record for record in records if record['status'] == 'success']
+    record = latest(successful, HTTP_METHOD) or latest([item for item in successful if not failed(observe(item))], '')
+    if record is None or failed(observe(record)):
+        return None
+    head, separator, dom = record['content'].partition(DOM_SEPARATOR)
+    return document_title(dom if separator else head)

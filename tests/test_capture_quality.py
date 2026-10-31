@@ -230,6 +230,30 @@ class PageSummary(unittest.TestCase):
                                            'little visible text after rendering (desktop and mobile)'])
         self.assertFalse(page['title_usable'])
 
+    def test_label_comes_from_the_recapture_not_an_earlier_rate_limit_page(self):
+        routes = {'/robots.txt': ROUTES['/robots.txt'],
+                  '/product': (429, {'Content-Type': 'text/html', 'Retry-After': '60'},
+                               b'<!doctype html><title>Too many requests</title><h1>Too many requests</h1>')}
+        with serve(routes) as (base, _), tempfile.TemporaryDirectory() as directory:
+            client, url = Client(delay=0, allow_private=True, proxies={}), base + '/product'
+            first, _ = fetch(client, [url], Path(directory))
+            routes['/product'] = html('Pumpkin cube candle | Shop', PROSE)
+            retry, _ = fetch(client, [url], Path(directory), id_prefix='retry')
+        records = [item for item in [*first, *retry] if item['source'] == url]
+        self.assertEqual([capture_quality.observe(item)['http_status'] for item in records], [429, 200])
+        page = capture_quality.page_summary([url], records)[0]
+        self.assertEqual((page['title_usable'], page['title']), (True, 'Pumpkin cube candle | Shop'))
+        report = render_client_html(report_data(assessed_run([url], records)))
+        self.assertIn(f'<td data-label="Page"><a href="{url}">Pumpkin cube candle</a></td>', report)
+        self.assertNotIn('Too many requests', report)
+
+    def test_label_skips_failed_captures_without_an_http_capture(self):
+        url = 'https://example.com/contact'
+        limited = browser_record('b-limited', url, '<title>Too many requests</title>', http_status=429)
+        normal = browser_record('b-normal', url, '<title>Contact us</title>' + PROSE, viewport='mobile')
+        self.assertEqual(capture_quality.page_summary([url], [normal, limited])[0]['title'], 'Contact us')
+        self.assertIsNone(capture_quality.page_summary([url], [limited])[0]['title'])
+
     def test_workflow_status_names_pages_that_saved_only_an_error(self):
         from unittest.mock import patch
         import audit
