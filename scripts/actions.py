@@ -288,6 +288,7 @@ def main():
     check.add_argument('--reviewer-type', choices=['human', 'agent'], required=True)
     check.add_argument('--rationale', required=True)
     args = parser.parse_args()
+    from capture_quality import review_prompts
     try:
         if args.command == 'init':
             state = initialise(args.run.read_bytes(), args.store or args.run.with_name('actions'))
@@ -302,9 +303,13 @@ def main():
                 changes['depends_on'] = []
             state = update(args.store, args.action, **changes)
         else:
-            state = review(args.store, args.action, args.run.read_bytes(), evidence_ids=args.evidence,
+            current_raw = args.run.read_bytes()
+            state = review(args.store, args.action, current_raw, evidence_ids=args.evidence,
                            result=args.result, reviewer=args.reviewer, reviewer_type=args.reviewer_type,
                            rationale=args.rationale)
+            # An error response can be the intended fix, so prompts are reported rather than refused.
+            registry = {item['id']: item for item in strict_json(current_raw.decode('utf-8'))['assessment']['evidence']}
+            state = {**state, 'capture_prompts': review_prompts(args.evidence, registry)}
         print(json.dumps(summary(state), ensure_ascii=False, indent=2))
     except (ValueError, OSError) as exc:
         parser.exit(2, f'Action tracking failed: {exc}\n')

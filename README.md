@@ -1,5 +1,5 @@
 # GEO Audit
-Version 1.6.0: action tracking, fresh-evidence verification and compatible audit comparisons. This is a local agent-assisted toolkit, not a SaaS or live AI-visibility tracker.
+Version 1.7.0: capture-quality prompts, bounded browser workers and international page URLs, on top of 1.6 action tracking and compatible audit comparisons. This is a local agent-assisted toolkit, not a SaaS or live AI-visibility tracker.
 
 The audit covers 34 detailed topics across five areas, with business-specific
 guidance, page-level findings, strengths, missing checks and an action plan.
@@ -21,6 +21,8 @@ python3 -m venv .venv
 .venv/bin/python scripts/install.py /absolute/path/to/skills
 ```
 The installer bundles instructions, role definitions, scripts, rubric and format documentation into geo-audit/. It stages a complete package and preserves prior customisations in .backups/, keeping the five newest (`--keep-backups N` to change). Obsolete active files are removed from the new package, but remain in the backup. Atomic upgrades require Linux renameat2; unsupported systems fail without changing the prior install. Global role conflicts are reported, never overwritten. The orchestrator must explicitly read the bundled role files. Restart/reload the agent session after installing. This source update does not automatically update existing global installations.
+
+Platforms: tested on Linux with Python 3.10 and 3.14. The workflow, action journal and installer use POSIX file locks, so Windows is unsupported outside WSL2. macOS is untested; its installer can create a fresh install but refuses upgrades because atomic directory exchange (renameat2) is Linux-only.
 
 ## Run
 For post-audit assignments and follow-ups, see [Action tracking and comparisons](docs/ACTIONS.md).
@@ -151,6 +153,24 @@ Set GEO_RENDER_ARTIFACTS to an existing writable directory to retain fixtures/PD
 Built by Apostolos Bolkas. Inspired by https://github.com/zubair-trabzada/geo-seo-claude.
 Research context: https://arxiv.org/abs/2311.09735. Study results are not guarantees for this rubric or an individual website.
 
+
+## Changes in 1.7.0
+
+- Capture-quality prompts: a saved 403 bot challenge, 404 page or empty render
+  is a successful capture, not useful content. Validation now warns when a
+  page's conclusions cite only such captures, so delivery approval needs a
+  resolution or a named qualification that the final report shows.
+- `audit.py status` lists each sampled page with its HTTP status and prompts;
+  client reports gain "How each page was captured" and a decision-summary line.
+- Browser observations run in a separate process group with a 180-second hard
+  deadline. A page that blocks its main thread previously hung the audit.
+- Non-ASCII page paths and raw UTF-8 redirect targets are percent-encoded on
+  the request line instead of failing; NAT64 addresses of private hosts are refused.
+- `delivery.py approve --acknowledge` accepts warnings whose URLs contain `=`.
+- Passing action reviews report capture prompts in their evidence.
+- Run schema 1.4.0, rubric 1.2.0, workflow configuration 1.1.0 and approval
+  formats are unchanged. Approvals of runs that now raise a prompt warning
+  must be renewed with an acknowledgement.
 
 ## Changes in 1.5.1
 

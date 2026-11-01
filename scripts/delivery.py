@@ -115,10 +115,12 @@ def approve(raw, reviewer, *, exclusions=None, acknowledgements=None, attachment
     return approval
 
 
-def assignments(values):
+def assignments(values, known=()):
     result = {}
     for value in values:
-        key, separator, reason = value.partition('=')
+        # Warnings quote URLs, whose queries can contain '='; split after the longest known text.
+        matched = max((key for key in known if value.startswith(key + '=')), key=len, default=None)
+        key, separator, reason = (matched, '=', value[len(matched) + 1:]) if matched else value.partition('=')
         if not separator or not key.strip() or not reason.strip() or key.strip() in result:
             raise ValueError('Use a unique CHECK=reason (or exact WARNING=reason) for each entry')
         result[key.strip()] = reason.strip()
@@ -145,8 +147,9 @@ def main():
         raw = args.run.read_bytes()
         _, attachments = prepare(raw, previous=args.compare, actions=args.actions)
         if args.command == 'approve':
+            _, warnings = audit_run(strict_json(raw.decode('utf-8')))
             approval = approve(raw, args.reviewer, exclusions=assignments(args.exclude),
-                               acknowledgements=assignments(args.acknowledge), attachments=attachments)
+                               acknowledgements=assignments(args.acknowledge, warnings), attachments=attachments)
             output = args.output or args.run.with_name('delivery.json')
             from safe_io import check_output
             check_output(args.run, output)

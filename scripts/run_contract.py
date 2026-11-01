@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from capture_quality import conclusion_warnings
 from evidence import strict_json, validate_registry, resolve_ids, extract, structured_data_markers, parse_timestamp
 from score import calculate, nonempty, WEIGHTS
 from review_topics import TOPICS
@@ -172,7 +173,8 @@ def advisory_warnings(run, registry):
     if placeholders:
         warnings.append(f"{placeholders} field(s) still contain the run skeleton placeholder; "
                         "replace them before delivery")
-    return warnings
+    # An error page, challenge or empty render is a successful capture, not useful content.
+    return warnings + conclusion_warnings(run, registry)
 
 
 def site_host(url):

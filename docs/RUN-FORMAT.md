@@ -1,6 +1,6 @@
 # Validated run formats 1.2.0, 1.3.0 and 1.4.0
 
-Toolkit 1.5.1 writes new audits in **run schema 1.4.0**. Runs in schemas 1.2.0
+Toolkit 1.7.0 writes new audits in **run schema 1.4.0**. Runs in schemas 1.2.0
 and 1.3.0 remain accepted without modification. The **score rubric stays 1.2.0
 and its pinned hash is unchanged**. A client report is the default; add
 `--technical` to export raw captures and internal criteria separately.
@@ -30,6 +30,21 @@ warnings, never rejections, for:
 - evidence collected in the future, after the audit date, or more than 180 days
   before it;
 - any field still containing the `[skeleton placeholder]` text from new_run.py.
+- a sample page whose recorded conclusions cite only captures with capture
+  prompts (toolkit 1.7.0). Prompts are derived from collect.py and
+  browser_collect.py records: an error response, an unfollowed redirect, a
+  possible bot challenge or "not found" page, a non-HTML body, an unmet content
+  check, or little visible text in the response or render. Thin-text prompts are
+  ignored for header-level checks (search directives, robots, sitemaps,
+  metadata, security, URLs and technical findings); the response-status topic is
+  exempt. A conclusion that also cites an unprompted capture of the page is not
+  flagged. Unknown conclusions are never flagged;
+- `search_directives` scored 100 while a cited capture carries noindex.
+
+Prompts ask a reviewer to check; they never establish a defect, and an absent
+prompt never establishes complete content. Captures from other methods yield no
+prompts. Delivery approval requires each of these warnings to be resolved or
+acknowledged with a reason, which the final report then shows.
 
 `run_contract.py` prints `{"valid": true, "warnings": [...], "scores": {...}}`.
 Treat every warning as work to resolve or explain before delivery. The

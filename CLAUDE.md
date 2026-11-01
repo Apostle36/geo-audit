@@ -7,7 +7,7 @@
 /geo-audit https://example.com
 ```
 
-The `/geo-audit` skill orchestrates the audit using explicitly loaded bundled roles and writes validated `run.json`, HTML and PDF in a unique run directory. It can perform roles sequentially when delegation is unavailable. Read `docs/RUN-FORMAT.md`, `docs/AUDIT-DEPTH.md`, `docs/CLIENT-REPORT.md`, `docs/WORKFLOW.md` and `docs/ACTIONS.md` for toolkit 1.6.0 (versions live in `scripts/version.py`). New runs use schema 1.4.0; core scoring retains immutable rubric 1.2.0; detailed review is separate. Default client exports are labelled drafts; final reports require a current named review. `--technical` exports raw evidence separately.
+The `/geo-audit` skill orchestrates the audit using explicitly loaded bundled roles and writes validated `run.json`, HTML and PDF in a unique run directory. It can perform roles sequentially when delegation is unavailable. Read `docs/RUN-FORMAT.md`, `docs/AUDIT-DEPTH.md`, `docs/CLIENT-REPORT.md`, `docs/WORKFLOW.md` and `docs/ACTIONS.md` for toolkit 1.7.0 (versions live in `scripts/version.py`). New runs use schema 1.4.0; core scoring retains immutable rubric 1.2.0; detailed review is separate. Default client exports are labelled drafts; final reports require a current named review. `--technical` exports raw evidence separately.
 
 ## Development
 

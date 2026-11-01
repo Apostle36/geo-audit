@@ -4,23 +4,32 @@ Fresh browser contexts execute public site JavaScript. Only GET/HEAD requests
 to the audited host or its www variant are allowed; private addresses, off-site
 navigations, popups, downloads, service workers and WebSockets are blocked.
 Robots rules apply to navigations. Asset requests use normal browser cadence.
-This local tool is not a hardened sandbox; DNS rebinding is still a limitation.
+Each observation runs in its own process group with a hard deadline, because
+page JavaScript can block DOM reads indefinitely. This local tool is not a
+hardened sandbox; DNS rebinding is still a limitation.
 """
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
+import signal
+import subprocess
+import sys
 from urllib.parse import urlsplit
 
 from browser_runtime import launch_chromium
 import capture_readiness
 from collect import (Client, MAX_BYTES, MAX_REDIRECTS, REDIRECTS, TOKEN, USER_AGENT, allowed_for,
                      check_urls, follow, host_twins, now, record)
+from evidence import strict_json
 from safe_io import write_new
 from version import TOOLKIT_VERSION
 
 VIEWPORTS = {'desktop': {'width': 1440, 'height': 900}, 'mobile': {'width': 390, 'height': 844}}
 METHOD = f'browser_collect.py {TOOLKIT_VERSION}: Chromium JavaScript observation'
+# Covers robots/preflight, a 30 s navigation, settling, a 30 s content check and the screenshot.
+DEADLINE_SECONDS = 180
 LIMITATIONS = [
     'Viewport screenshots and DOM snapshots are observations, not a complete accessibility review.',
     'Navigation and paint timings are a single local lab observation; field Core Web Vitals and INP are not measured.',
@@ -180,6 +189,69 @@ def dump(value):
     return (json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False) + '\n').encode('utf-8')
 
 
+def worker_command(url, output, *, identifier, viewport, allow_private, settle_ms, ready_selector,
+                   ready_min_count, ready_timeout_ms):
+    command = [sys.executable, str(Path(__file__).resolve()), url, str(Path(output).absolute()), '--in-process',
+               f'--viewport={viewport}', f'--id={identifier}', f'--settle-ms={settle_ms}',
+               f'--ready-min-count={ready_min_count}', f'--ready-timeout-ms={ready_timeout_ms}']
+    if ready_selector is not None:
+        command.append(f'--ready-selector={ready_selector}')
+    if allow_private:
+        command.append('--allow-private')
+    return command
+
+
+def capture_isolated(client, url, output, *, identifier='browser-01', viewport='desktop', settle_ms=500,
+                     ready_selector=None, ready_min_count=1, ready_timeout_ms=10000, deadline=DEADLINE_SECONDS):
+    """capture() in a separate process group that is killed, with its browser, after a hard deadline.
+
+    A timeout or worker crash becomes an explicit failed observation; the
+    client's per-host request spacing is kept across the process boundary.
+    """
+    if check_urls([url]):
+        raise ValueError('; '.join(check_urls([url])))
+    if viewport not in VIEWPORTS:
+        raise ValueError('Use desktop or mobile')
+    capture_readiness.settings(selector=ready_selector, min_count=ready_min_count, timeout_ms=ready_timeout_ms,
+                               settle_ms=settle_ms)
+    output = Path(output)
+    if output.exists() or output.is_symlink():
+        raise FileExistsError(f'Observation directory already exists: {output}')
+    command = worker_command(url, output, identifier=identifier, viewport=viewport,
+                             allow_private=client.allow_private, settle_ms=settle_ms, ready_selector=ready_selector,
+                             ready_min_count=ready_min_count, ready_timeout_ms=ready_timeout_ms)
+    host = client.pause(url)
+    process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.PIPE, start_new_session=True)
+    reason = None
+    try:
+        _, errors = process.communicate(timeout=deadline)
+        if process.returncode not in (0, 4):
+            detail = errors.decode('utf-8', errors='replace').strip().splitlines()[-1:] or ['no diagnostic']
+            reason = f'browser worker exited with status {process.returncode}: {detail[0][:300]}'
+    except subprocess.TimeoutExpired:
+        reason = (f'exceeded the {deadline}-second observation limit; page JavaScript may have blocked the '
+                  'browser, which was stopped')
+    finally:
+        if process.returncode is None:  # Still running, so its process group cannot have been reused.
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.communicate()
+        client.last[host] = client.clock()
+    if (output / 'result.json').is_file():
+        return strict_json((output / 'result.json').read_text(encoding='utf-8'))
+    output.mkdir(parents=True, exist_ok=True)
+    evidence = record(identifier, url, now(), f'Browser observation failed: {reason or "no result was saved"}',
+                      'failed')
+    evidence['method'] = METHOD + f' ({viewport})'
+    result = {'evidence': [evidence], 'log': {'url': url, 'viewport': viewport, 'limitations': list(LIMITATIONS),
+                                              'status': 'failed', 'blocked_requests': []}}
+    write_new(output / 'result.json', dump(result))
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('url')
@@ -187,11 +259,14 @@ def main():
     parser.add_argument('--viewport', choices=VIEWPORTS, default='desktop')
     parser.add_argument('--id', default='browser-01')
     parser.add_argument('--allow-private', action='store_true', help='Explicitly allow a local/staging site')
+    parser.add_argument('--in-process', action='store_true',
+                        help='Run in this process without the isolating worker and its hard deadline')
     capture_readiness.add_arguments(parser)
     args = parser.parse_args()
     try:
         config = capture_readiness.from_arguments(args)
-        result = capture(Client(allow_private=args.allow_private), args.url, args.output,
+        observe = capture if args.in_process else capture_isolated
+        result = observe(Client(allow_private=args.allow_private), args.url, args.output,
                          identifier=args.id, viewport=args.viewport, settle_ms=config['settle_ms'],
                          ready_selector=config['selector'], ready_min_count=config['min_count'],
                          ready_timeout_ms=config['timeout_ms'])
