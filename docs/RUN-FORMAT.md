@@ -1,11 +1,83 @@
-# Validated run formats 1.2.0, 1.3.0 and 1.4.0
+# Validated run formats 1.2.0, 1.3.0, 1.4.0 and 1.5.0
 
-Toolkit 1.7.0 writes new audits in **run schema 1.4.0**. Runs in schemas 1.2.0
-and 1.3.0 remain accepted without modification. The **score rubric stays 1.2.0
-and its pinned hash is unchanged**. A client report is the default; add
-`--technical` to export raw captures and internal criteria separately.
+Toolkit 1.8.0 writes new audits in **run schema 1.5.0**. Runs in schemas 1.2.0,
+1.3.0 and 1.4.0 remain accepted without modification. The **score rubric stays
+1.2.0 and its pinned hash is unchanged**. A client report is the default; add
+`--technical` to export raw captures, numeric scores and internal criteria separately.
 
-## Schema 1.4.0: strict provenance (current)
+## Schema 1.5.0: evidence-backed claims (current)
+
+Schema 1.5.0 keeps every 1.4.0 field and rule and adds the following. All of
+them are required in 1.5.0 runs; `new_run.py` and the workflow write empty or
+null values to start with.
+
+| Where | Field | Contract |
+|---|---|---|
+| Evidence record | `source_type` | `audited_site`, `off_site`, `search_snippet` or `owner_statement`. An `audited_site` source is on the audited host, `www` or a subdomain; an `off_site` source is not; collector captures cannot be snippets or owner statements. The hash still covers `content` only. |
+| Metadata | `legal_pages` | The sampled privacy, terms, cookie and legal-notice pages (a subset of the sample), outside the template counts. |
+| Finding | `title` | One line, at most 90 characters: the action shown in the plan. |
+| Finding | `excerpts` | `[{"evidence_id", "text"}]` or `[{"evidence_id", "href"}]`, from the finding's own evidence. Each must be found in its record after whitespace, HTML-entity and curly-quote normalisation (text) or as an `href` value (href). Non-unknown findings need at least one. |
+| Finding | `criteria` | Rubric criterion IDs the finding would change, possibly empty. |
+| Review item | `finding_ids` | Findings the topic relates to, possibly empty. |
+| Top level | `entities` | Entity register; see below. |
+| Top level | `owner_questions` | Questions only the owner can answer; see below. |
+| Top level | `claim_check` | `null` or the independent claim check; see below. |
+| Top level | `visibility` | `null` or the AI visibility question set and observations; see below. |
+
+**On-page claims.** When a sentence of `observed` or `claim` contains an excerpt
+and an on-page verb (shows, says, links to, lists, names, displays, states, spells,
+reads; not "search results show"), the excerpt must come from an `audited_site`
+capture of a page the finding names, or from an `off_site` capture. A sentence that
+contains a `search_snippet` excerpt must mention search. Either problem rejects the run.
+
+**Counts.** "N of M <noun>" and "N of the M <noun>" in the sampling rationale or
+limitations, written in digits or as number words, are compared with the saved
+sitemap (`sample_groups.py`): sitemap URLs are grouped by parent path section, and
+a section's own page is its hub, not one of its items. "sitemap URLs" refers to the
+total. A mismatch rejects a 1.5.0 run; nouns that match no single section are not
+checked. `audit.py sample` and `new_run.py` append a composition sentence computed
+from the sitemap, phrased so this check verifies it.
+
+**Entity register.** Each entry has exactly `id`, `name`, `kind` (business, client,
+person, organisation), `spellings` (`[{"text", "evidence_ids"}]`, each found in its
+evidence), `reference` (`null` or `{"spelling", "evidence_id", "basis"}` with basis
+`entity_site`, `official_register` or `owner`; an owner reference cites an
+`owner_statement`), `status` (`confirmed`, `inconsistent`, `wrong`, `needs_owner`)
+and `finding_ids`. For an unconfirmed entity, every spelling other than the
+reference is flagged. A strength (informational, present observation) may not
+contain a flagged spelling. A linked finding's `fix` must contain the reference
+spelling. A `needs_owner` entity needs an owner question. A review summary that
+contains a flagged spelling without citing the entity's finding is a warning.
+
+**Owner questions.** Each has exactly `id`, `question` (ending with a question mark),
+`seen`, `why`, `likely_answers` (nonempty), `finding_ids`, `entity_ids` and
+`evidence_ids`. Normalised duplicates are rejected. A finding whose fix contains a
+bracketed placeholder or "confirm with" and that no question links to is a warning.
+
+**Claim check.** `{"reviewer", "reviewer_type" (agent|human), "checked_at",
+"sentences": [{"finding_id", "field" (observed|claim), "text", "evidence_ids",
+"verdict" (supported|search_only|unsupported), "note"}]}`, written by
+`claim_check.py record`. A sentence is matched by its exact text, so editing it
+makes the verdict stale. Unsupported sentences, and `search_only` sentences that do
+not mention search, block every client export; final delivery also needs a
+complete, current check.
+
+**Visibility.** `{"inputs": {"services", "customer_types", "market"}, "questions":
+[15 to 20 distinct questions], "observations": [...]}`. Each observation has exactly
+`platform`, `date`, `question` (an index), `brand_named`, `cited_urls`,
+`competitors` and `evidence_id` (an `off_site` or `owner_statement` record).
+Observations never change scores. A `null` plan blocks delivery.
+
+**Advisory checks for every schema.** Warnings, not rejections: a distinctive term
+(a quoted string or capitalised word) that appears only in cited search-snippet
+evidence in a sentence with an on-page verb; a conclusion that no page names a
+legal entity or registered name when no legal page was sampled; a blocked
+session-recording or heatmap script that was not checked, or that no finding
+cites; a review summary that reuses at least a fifth of a finding's four-word
+runs. For older runs, source types are inferred from method and source, and count
+mismatches are warnings.
+
+## Schema 1.4.0: strict provenance
 
 Schema 1.4.0 has exactly the fields of 1.3.0, including the `review` list
 described below. It additionally rejects these evidence-linkage problems:
@@ -128,8 +200,8 @@ have one winner. Explicit concurrent overwrites are atomic, last writer wins.
 
 ## Exact top-level fields
 
-- `schema_version`: `"1.4.0"` for new runs; `"1.3.0"` and `"1.2.0"` remain readable.
-  Schemas 1.3.0 and 1.4.0 also require `review`.
+- `schema_version`: `"1.5.0"` for new runs; `"1.4.0"`, `"1.3.0"` and `"1.2.0"` remain readable.
+  Schemas 1.3.0 and later also require `review`; 1.5.0 adds the fields listed above.
 - `metadata`: `url` (HTTP/S), `date` (YYYY-MM-DD), `business_type`, `market`,
   `language`, `sample` (1–50 unique HTTP/S page URLs, no fragments in 1.4.0),
   `sampling_rationale`.

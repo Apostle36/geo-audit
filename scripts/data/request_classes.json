@@ -1,0 +1,58 @@
+{
+  "version": "1.0.0",
+  "description": "Classes for third-party and blocked browser requests. Matching order is the order of 'order'; the first class whose host, host prefix or path pattern matches wins. Hosts match exactly or as a parent domain. Path patterns match case-insensitively anywhere in the path and query. Edit this file to add vendors; no vendor is named in code.",
+  "order": ["session_recording", "consent", "advertising", "analytics", "content"],
+  "labels": {
+    "session_recording": "session recording or heatmap",
+    "consent": "consent management",
+    "advertising": "advertising",
+    "analytics": "analytics",
+    "content": "content-bearing",
+    "unclassified": "unclassified"
+  },
+  "categories": {
+    "session_recording": {
+      "hosts": ["hotjar.com", "hotjar.io", "clarity.ms", "fullstory.com", "mouseflow.com", "smartlook.com",
+                "smartlook.cloud", "logrocket.io", "logrocket.com", "lr-ingest.io", "lr-in-prod.com",
+                "luckyorange.com", "luckyorange.net", "crazyegg.com", "inspectlet.com", "contentsquare.net",
+                "quantummetric.com", "sessioncam.com", "openreplay.com", "glassboxdigital.io"],
+      "host_prefixes": [],
+      "paths": ["recorder.js", "session-replay", "sessionreplay", "session_replay", "session-recording",
+                "replay.min.js", "/rrweb", "webvisor", "posthog-recorder", "lazy-recorder"]
+    },
+    "consent": {
+      "hosts": ["cookiebot.com", "cookielaw.org", "onetrust.com", "usercentrics.eu", "iubenda.com",
+                "cookieyes.com", "cdn-cookieyes.com", "osano.com", "termly.io", "consentmanager.net",
+                "didomi.io", "trustarc.com", "cookie-script.com", "cookiehub.net", "cookiefirst.com"],
+      "host_prefixes": ["consent.", "cmp."],
+      "paths": ["cookieconsent", "cookie-consent", "consent-manager", "/klaro"]
+    },
+    "advertising": {
+      "hosts": ["doubleclick.net", "googlesyndication.com", "googleadservices.com", "adservice.google.com",
+                "connect.facebook.net", "snap.licdn.com", "px.ads.linkedin.com", "ads.linkedin.com",
+                "analytics.tiktok.com", "bat.bing.com", "ads-twitter.com", "criteo.com", "criteo.net",
+                "taboola.com", "outbrain.com", "adroll.com", "quantserve.com", "amazon-adsystem.com"],
+      "host_prefixes": ["ads.", "adserver."],
+      "paths": ["fbevents.js", "insight.min.js", "uwt.js"]
+    },
+    "analytics": {
+      "hosts": ["google-analytics.com", "analytics.google.com", "googletagmanager.com", "plausible.io",
+                "umami.is", "matomo.cloud", "segment.com", "segment.io", "mxpnl.com", "mixpanel.com",
+                "heapanalytics.com", "amplitude.com", "cloudflareinsights.com", "simpleanalyticscdn.com",
+                "usefathom.com", "goatcounter.com", "gc.zgo.at", "mc.yandex.ru", "hs-analytics.net",
+                "posthog.com", "pirsch.io", "counter.dev", "statcounter.com"],
+      "host_prefixes": ["stats.", "analytics.", "metrics.", "telemetry.", "plausible.", "umami.", "matomo.",
+                        "piwik.", "tracking.", "track."],
+      "paths": ["gtag/js", "analytics.js", "matomo.js", "piwik.js"]
+    },
+    "content": {
+      "hosts": ["fonts.googleapis.com", "fonts.gstatic.com", "api.fontshare.com", "cdn.fontshare.com",
+                "use.typekit.net", "p.typekit.net", "cdnjs.cloudflare.com", "cdn.jsdelivr.net", "unpkg.com",
+                "ajax.googleapis.com", "youtube.com", "youtube-nocookie.com", "ytimg.com", "player.vimeo.com",
+                "vimeocdn.com", "maps.googleapis.com", "maps.gstatic.com", "cloudinary.com", "imgix.net",
+                "ctfassets.net", "cdn.shopify.com", "wistia.com", "wistia.net"],
+      "host_prefixes": ["cdn.", "static.", "img.", "images.", "assets.", "media."],
+      "paths": []
+    }
+  }
+}

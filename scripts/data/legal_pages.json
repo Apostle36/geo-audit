@@ -1,0 +1,16 @@
+{
+  "version": "1.0.0",
+  "description": "Patterns that identify legal pages (privacy, terms, cookies, legal notice or imprint) from a link's path or visible label. Matching is case-insensitive. Path patterns match whole path segments or segment prefixes; label patterns match words in the link text. Add languages here, not in code.",
+  "path_segments": ["privacy", "privacy-policy", "privacy-notice", "data-protection", "datenschutz", "datenschutzerklaerung",
+                    "privacidad", "politica-de-privacidad", "privacite", "confidentialite", "politique-de-confidentialite",
+                    "privacybeleid", "informativa-privacy", "polityka-prywatnosci", "politika-za-poveritelnost",
+                    "terms", "terms-of-use", "terms-of-service", "terms-and-conditions", "conditions", "agb",
+                    "nutzungsbedingungen", "terminos", "condiciones", "cgu", "cgv", "mentions-legales", "voorwaarden",
+                    "termini", "regulamin", "obshti-uslovia", "usloviya",
+                    "cookies", "cookie-policy", "cookie-notice", "cookie-richtlinie", "politica-de-cookies",
+                    "legal", "legal-notice", "imprint", "impressum", "aviso-legal", "note-legali", "colofon"],
+  "labels": ["privacy", "privacy policy", "privacy notice", "data protection", "datenschutz", "privacidad",
+             "confidentialité", "terms", "terms of use", "terms of service", "terms and conditions", "conditions",
+             "agb", "términos", "mentions légales", "cookies", "cookie policy", "cookie notice", "legal",
+             "legal notice", "imprint", "impressum", "aviso legal", "поверителност", "условия", "бисквитки"]
+}

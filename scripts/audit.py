@@ -22,8 +22,11 @@ import capture_quality
 import capture_readiness
 import collect
 from delivery import readiness, validate_approval
+from claims import on_audited_site
 from evidence import strict_json, validate_registry
-from new_run import skeleton
+from legal_pages import is_legal_url
+from new_run import composed_rationale, skeleton, with_source_types
+import request_classes
 from run_contract import audit_run, fields, nonempty, web_url
 from safe_io import atomic_write, write_new
 
@@ -77,8 +80,27 @@ def configuration(root):
     return config
 
 
+def with_legal_pages(urls, candidates):
+    """Legal pages found in the footer or sitemap are always sampled, outside the template counts."""
+    legal = [item['loc'] for item in candidates
+             if is_legal_url(item['loc']) or item.get('source') in {'footer', 'page'}]
+    legal = list(dict.fromkeys(legal))
+    combined = list(urls) + [url for url in legal if url not in urls]
+    if len(combined) > collect.MAX_PAGES:
+        raise ValueError(f'The {len(legal)} legal page(s) found are always sampled; choose at most '
+                         f'{collect.MAX_PAGES - len(set(legal) - set(urls))} other pages')
+    return {'urls': combined, 'legal': legal}
+
+
 def select_sample(root, urls, rationale):
     config = configuration(root)
+    discovery = cached(root, 'discovery')
+    if discovery:
+        chosen = with_legal_pages(urls, discovery['log']['discovery'].get('legal_candidates', []))
+        urls, legal = chosen['urls'], chosen['legal']
+        rationale = composed_rationale(rationale, urls, discovery.get('evidence', []), legal)
+    else:
+        legal = []
     problems = collect.check_urls(urls)
     if problems:
         raise ValueError('; '.join(problems))
@@ -89,7 +111,7 @@ def select_sample(root, urls, rationale):
     if (root / 'run.json').exists():
         raise ValueError('Sample already frozen in run.json; start a new audit to change scope')
     sample_budget(root, urls)
-    write_new(root / 'sample.json', dump({'urls': urls, 'rationale': rationale}))
+    write_new(root / 'sample.json', dump({'urls': urls, 'rationale': rationale, 'legal': legal}))
 
 
 def sample(root):
@@ -97,7 +119,11 @@ def sample(root):
     if not path.exists():
         return None
     selection = read(path)
-    fields(selection, {'urls', 'rationale'}, 'Sample selection')
+    if set(selection) != {'urls', 'rationale'}:
+        fields(selection, {'urls', 'rationale', 'legal'}, 'Sample selection')
+    legal = selection.get('legal', [])
+    if not isinstance(legal, list) or any(url not in selection.get('urls', []) for url in legal):
+        raise ValueError('Sample legal pages must be part of the sample')
     if not isinstance(selection['urls'], list) or any(not isinstance(url, str) for url in selection['urls']):
         raise ValueError('Sample URLs must be a list of strings')
     if collect.check_urls(selection['urls']):
@@ -221,9 +247,11 @@ def sync_run(root, config, selection, records):
         if meta['sample'] != selection['urls'] or meta['sampling_rationale'] != selection['rationale']:
             raise ValueError('Run sample diverged from the frozen workflow sample')
         registry = {item['id']: item for item in run['assessment']['evidence']}
+        if run['schema_version'] == '1.5.0':
+            records = with_source_types(records, config['url'])
         changed = False
         for item in records:
-            if item['id'] in registry and registry[item['id']] != item:
+            if item['id'] in registry and not same_record(registry[item['id']], item):
                 raise ValueError(f"Checkpoint differs from embedded evidence: {item['id']}")
             if item['id'] not in registry:
                 run['assessment']['evidence'].append(item)
@@ -236,9 +264,49 @@ def sync_run(root, config, selection, records):
     else:
         run = skeleton(url=config['url'], sample=selection['urls'], business_type=config['business_type'],
                        market=config['market'], language=config['language'], sampling_rationale=selection['rationale'],
-                       date=config['date'], evidence=records)
+                       date=config['date'], evidence=records, legal_pages=selection.get('legal', []), compose=False)
         audit_run(run)
         write_new(path, dump(run))
+
+
+def same_record(embedded, checkpoint):
+    """A checkpoint matches its embedded copy; the run may add an inferred source_type."""
+    def strip(item):
+        return {key: value for key, value in item.items() if key != 'source_type'}
+    return strip(embedded) == strip(checkpoint) and (
+        'source_type' not in checkpoint or embedded.get('source_type') == checkpoint['source_type'])
+
+
+SCRIPT_SUFFIXES = ('.js', '.mjs', '.cjs')
+MAX_SCRIPT_CHECKS = 25
+
+
+def blocked_scripts(records):
+    """Scripts the browser blocked, to be fetched once (never executed) by the blocked-scripts step."""
+    from run_checks import browser_measurements
+    urls = []
+    for item in records:
+        values = browser_measurements(item)
+        for request in (values or {}).get('blocked_requests') or []:
+            url = request.get('url') if isinstance(request, dict) else None
+            if not isinstance(url, str) or url in urls or collect.check_urls([url]):
+                continue
+            path = urlsplit(url).path.lower()
+            if path.endswith(SCRIPT_SUFFIXES) or not request_classes.changes_content(request_classes.classify(url)):
+                urls.append(url)
+    return urls[:MAX_SCRIPT_CHECKS]
+
+
+def collect_blocked_scripts(client, urls, output, prefix, origin):
+    output.mkdir()
+    raw = output / 'raw'
+    raw.mkdir()
+    evidence, log = collect.fetch(client, urls, raw, id_prefix=prefix, summary_only=True, classify=True)
+    evidence = [collect.record(item['id'], item['source'], item['collected_at'], item['content'], item['status'],
+                               'audited_site' if on_audited_site(item['source'], origin) else 'off_site')
+                for item in evidence]
+    log['status'] = 'success' if any(page['status'] == 'success' for page in log['pages']) else 'failed'
+    return {'evidence': evidence, 'log': log}
 
 
 def resume(root, *, retry_failed=False):
@@ -276,6 +344,12 @@ def resume(root, *, retry_failed=False):
                 records.extend(rendered['evidence'])
                 if existing_run:
                     sync_run(root, config, selection, records)
+    scripts = blocked_scripts(records) if config['browser'] else []
+    if scripts:
+        checked = checkpoint(root, 'blocked-scripts',
+                             lambda out, prefix: collect_blocked_scripts(client, scripts, out, prefix, config['url']),
+                             retry_failed=retry_failed)
+        records.extend(checked['evidence'])
     sync_run(root, config, selection, records)
     return status(root)
 
@@ -308,6 +382,11 @@ def status(root, *, approval_path=None, previous_path=None, actions_path=None):
             step['content_readiness'] = completed['log'].get('content_readiness', {'status': 'not_recorded'})
         result['steps'].append(step)
         records += completed['evidence'] if completed else []
+    if config['browser'] and (cached(root, 'blocked-scripts') or blocked_scripts(records)):
+        completed = cached(root, 'blocked-scripts')
+        names.append('blocked-scripts')
+        result['steps'].append({'step': 'blocked-scripts', 'status': completed['log']['status'] if completed else 'pending'})
+        records += completed['evidence'] if completed else []
     result['content_readiness'] = {state: sum(step.get('content_readiness', {}).get('status') == state
                                             for step in result['steps'])
                                    for state in ('met', 'unverified', 'timeout', 'not_recorded')}
@@ -336,7 +415,8 @@ def status(root, *, approval_path=None, previous_path=None, actions_path=None):
         unsynced = []
         for name in names:
             completed = cached(root, name)
-            if completed and any(registry.get(item['id']) != item for item in completed['evidence']):
+            if completed and any(item['id'] not in registry or not same_record(registry[item['id']], item)
+                                 for item in completed['evidence']):
                 unsynced.append(name)
         result.update(stage='review', delivery=readiness(run), unsynced_steps=unsynced,
                       next='Review evidence and edit run.json; run delivery.py check, then approve when ready.')
@@ -369,10 +449,11 @@ def export(root, output, *, final=False, approval=None, content_lang=None, overw
     spec = importlib.util.spec_from_file_location('geo_report_export', Path(__file__).with_name('geo-audit-pdf.py'))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    module.export_report(root / 'run.json', output, final=final, approval_path=approval,
-                         content_lang=content_lang, overwrite=overwrite,
-                         previous_path=previous_path, actions_path=actions_path)
-    return {'saved': str(output), 'state': 'ready' if final else 'draft'}
+    info = module.export_report(root / 'run.json', output, final=final, approval_path=approval,
+                                content_lang=content_lang, overwrite=overwrite,
+                                previous_path=previous_path, actions_path=actions_path) or {}
+    return {'saved': str(output), 'state': 'ready' if final else 'draft', 'pages': info.get('pages'),
+            'warnings': info.get('warnings', [])}
 
 
 def main():

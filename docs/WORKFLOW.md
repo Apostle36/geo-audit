@@ -1,7 +1,7 @@
 # Guided local audit workflow
 
-Toolkit 1.7.0 provides a resumable CLI, optional browser evidence and reviewed final
-exports. Run schema 1.4.0 and immutable score rubric 1.2.0 are unchanged. Existing
+Toolkit 1.8.0 provides a resumable CLI, optional browser evidence and reviewed final
+exports. New runs use schema 1.5.0; the immutable score rubric 1.2.0 is unchanged. Existing
 helper commands and historical runs remain supported.
 
 ## Start and choose pages
@@ -33,6 +33,18 @@ Scope freezes in sample.json; use a new audit to change it. Metadata and options
 are preserved in workflow.json. `--browser` is opt-in at start; without it only
 HTTP evidence is collected. `--allow-private` explicitly permits local/staging
 addresses and is off by default. No logins or accounts are created.
+
+## Legal pages and computed counts (1.8.0)
+
+Discovery captures the starting page once, even when sitemaps succeed, and records
+same-site legal links from its footer (`legal_candidates`), plus sitemap URLs that
+match `scripts/data/legal_pages.json`. `sample` adds those privacy, terms, cookie and
+legal-notice pages automatically. They are stored as `legal` in sample.json and
+`metadata.legal_pages`, sit outside the template counts and count toward the 50-page
+limit. `sample` also appends a composition sentence computed from the saved sitemap
+to the rationale ("4 of 15 sitemap URLs are sampled; 0 of 8 templates
+(/resources/templates/, plus the section page)"). Do not type counts yourself:
+schema 1.5.0 rejects a hand-written "N of M" count that disagrees with the sitemap.
 
 ## Resume and retry
 
@@ -144,6 +156,17 @@ blocked resources. Older captures are never retroactively labelled verified.
 Full capture history remains in the run and technical export. Page labels use
 saved titles where available, shorter URL fallbacks, and distinguishable queries.
 
+## Blocked scripts (1.8.0)
+
+After the browser steps, `resume` runs one `blocked-scripts` checkpoint. It fetches
+each distinct script the browser blocked (and any blocked analytics, recording,
+advertising or consent request), up to 25, once with `collect.py fetch
+--summary-only --classify`: robots rules, private-address refusal and request
+spacing apply, nothing is executed, and the record keeps status, content type,
+size, SHA-256 and the request class instead of the body. A 404 is recorded as
+"referenced but not served". Validation warns when a recording or heatmap script
+was referenced but not checked, or when no finding cites its check.
+
 ## Analyse and preview
 
 Collection creates run.json with unknown criteria/topics. The analyst examines
@@ -159,6 +182,29 @@ Client exports have a visible DRAFT label, also repeated in PDF footers.
 Structural validation still accepts drafts. Delivery checking exits 4 for
 outstanding work, 2 for invalid input and 0 for a reviewable scope. Checking does
 not create an approval.
+
+## Claim check and visibility plan (1.8.0)
+
+Before delivery, a separate agent that did not write the findings checks every
+factual sentence:
+
+```sh
+python scripts/claim_check.py worklist /absolute/path/new-audit/run.json > worklist.json
+# geo-claim-check returns one verdict per sentence in verdicts.json
+python scripts/claim_check.py record /absolute/path/new-audit/run.json verdicts.json \
+  --reviewer 'geo-claim-check agent' --reviewer-type agent
+python scripts/claim_check.py status /absolute/path/new-audit/run.json
+```
+
+Unsupported sentences block every client export until they are fixed or removed;
+editing a checked sentence makes its verdict stale. Final delivery needs a complete,
+current check and a visibility plan:
+
+```sh
+python scripts/visibility.py draft --service 'B2B websites' --customer 'industrial manufacturers' \
+  --market 'EU' --brand 'Example Studio' > visibility.json
+python scripts/visibility.py record /absolute/path/new-audit/run.json visibility.json
+```
 
 ## Review and deliver
 

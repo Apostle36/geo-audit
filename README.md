@@ -1,14 +1,15 @@
 # GEO Audit
-Version 1.7.0: capture-quality prompts, bounded browser workers and international page URLs, on top of 1.6 action tracking and compatible audit comparisons. This is a local agent-assisted toolkit, not a SaaS or live AI-visibility tracker.
+Version 1.8.0: evidence-backed claims (excerpts, source types and an independent claim check), an entity register, computed sample counts, recorder and legal-page checks, owner questions, an AI visibility question set and a shorter client report, on top of 1.7 capture-quality prompts and 1.6 action tracking. This is a local agent-assisted toolkit, not a SaaS or live AI-visibility tracker.
 
 The audit covers 34 detailed topics across five areas, with business-specific
 guidance, page-level findings, strengths, missing checks and an action plan.
 The ten scored core criteria remain on immutable rubric 1.2.0 for continuity;
 they do not replace the detailed analysis or establish complete website health.
-New runs use schema 1.4.0, which adds strict evidence-provenance checks to the
-1.3.0 detailed review records. Existing 1.2.0 and 1.3.0 runs still validate and
-render, with missing detail labelled rather than fabricated and provenance
-problems reported as warnings.
+New runs use schema 1.5.0, which ties each finding's factual sentences to exact
+excerpts of typed evidence and adds an entity register, owner questions, an AI
+visibility question set and an independent claim check. Existing 1.2.0, 1.3.0 and
+1.4.0 runs still validate and render, with missing detail labelled rather than
+fabricated and the new checks reported as warnings.
 
 The five core roles assess citability, independent authority, content quality, technical eligibility, and structured data. A sixth optional role can guide separately recorded AI observations; no live-platform collection integration exists. Readiness scores are not predictions of citations or empirically validated ranking metrics.
 
@@ -62,7 +63,7 @@ Client exports default to labelled drafts. After reviewing findings and evidence
 a named reviewer can approve the exact run with `delivery.py`; `--final` requires
 that current approval. Placeholders, unfinished required checks and unexplained
 warnings block approval. Explicit exclusions remain visible. Editing run.json
-invalidates approval. Run schema 1.4.0 and rubric 1.2.0 are unchanged.
+invalidates approval. Rubric 1.2.0 is unchanged; new runs use schema 1.5.0.
 
 Invoke /geo-audit https://example.com with the updated skill installed. Each run uses a unique audits/<hostname>/<UTC timestamp>/ directory. Its authoritative artifact is run.json, embedding metadata, captured evidence, findings and assessment. Reports derive from that validated data.
 
@@ -70,17 +71,19 @@ Collection is done by `scripts/collect.py`, a bounded, polite HTTP collector:
 
 1. `collect.py discover` reads robots.txt (RFC 9309), expands sitemap indexes and
    lists candidate pages, with the robots decision for common search, training and
-   user-triggered crawler tokens. If sitemaps yield none, it captures one starting
-   page and suggests up to 100 same-site navigation URLs without following them.
-   The workflow reuses that response if selected, preserving original raw bytes.
+   user-triggered crawler tokens. It captures the starting page once to find the
+   legal pages in its footer; if sitemaps yield none, that page also suggests up
+   to 100 same-site navigation URLs without following them. The workflow reuses
+   that response if selected, preserving original raw bytes.
 2. The agent chooses and justifies the sample.
 3. `collect.py fetch` captures each sample page once, enforcing the method's limits:
    50 pages, 30 seconds and 5 MiB per response, 5 redirects and at least one
    second between requests to a host. It obeys robots.txt for its own `GEO-Audit`
    token, refuses private addresses and off-site redirects, and records failures
    as failed or unavailable evidence rather than dropping them.
-4. `new_run.py` creates a schema 1.4.0 run.json with that evidence embedded and every
-   criterion and topic marked unknown, ready for the specialist roles.
+4. `new_run.py` creates a schema 1.5.0 run.json with that evidence embedded and every
+   criterion and topic marked unknown, ready for the specialist roles. Legal pages
+   are sampled automatically and the rationale gains counts computed from the sitemap.
 
 The HTTP collector does not run JavaScript, solve bot challenges or log in.
 Opt-in browser collection supplements it with rendered observations; deeper
@@ -153,6 +156,50 @@ Set GEO_RENDER_ARTIFACTS to an existing writable directory to retain fixtures/PD
 Built by Apostolos Bolkas. Inspired by https://github.com/zubair-trabzada/geo-seo-claude.
 Research context: https://arxiv.org/abs/2311.09735. Study results are not guarantees for this rubric or an individual website.
 
+
+## Changes in 1.8.0
+
+Fixes for systematic errors found when a 1.7.0 draft was checked against a site's
+source code and live pages. Nothing is specific to one brand.
+
+- **Evidence-backed claims.** Run schema 1.5.0 adds `excerpts` to findings: the
+  exact text or href each claim relies on, checked against the cited record after
+  normalising whitespace, entities and quotes. Every evidence record has a
+  `source_type` (audited site, off-site capture, search-result snippet, owner
+  statement). A page "shows", "says" or "links to" something only when the excerpt
+  is a capture of that page; a search-snippet fact must say so. Older runs get a
+  warning when a distinctive term appears only in search evidence but is presented
+  as on-page.
+- **Independent claim check.** `scripts/claim_check.py` and the new
+  `geo-claim-check` role record a verdict per factual sentence. Unsupported
+  sentences block every client export; final delivery needs a complete, current check.
+- **Entity register.** `entities` lists each business, client and person with the
+  spellings seen, the reference spelling from the entity's own site or an official
+  register, and a status. Strengths cannot praise a flagged name, and fixes must
+  recommend the reference spelling.
+- **Requests, recorders and legal pages.** Blocked browser requests are classified
+  from `scripts/data/request_classes.json`; each blocked script is fetched once
+  without executing it. Legal pages from the footer or sitemap are always sampled.
+  Warnings cover unchecked recording tools and "no page names a legal entity"
+  conclusions drawn without the legal pages.
+- **Computed counts.** `scripts/sample_groups.py` counts sitemap pages by section
+  (a section's own page is not one of its items). The rationale gains a generated
+  composition sentence, and schema 1.5.0 rejects "N of M" counts that disagree.
+- **Client report.** A readiness status table (met, partly met, not met, unknown,
+  with the actions that would change each check) replaces client-facing numbers;
+  scores stay in the technical export and comparisons. Analyst action titles
+  replace clipped previews; affected pages show a count and up to three names.
+  Strengths form one short section. Identical capture prompts collapse, and
+  blocked analytics, recording, advertising or consent requests no longer raise
+  "rendering fidelity". Topics link their findings; the contract warns when a
+  topic repeats one. PDF exports warn when pages exceed actions plus eight.
+- **Owner questions and AI visibility.** `owner_questions` gathers facts only the
+  owner can supply into one section of plain questions. The `visibility` plan holds
+  15–20 buyer questions (`scripts/visibility.py draft`) and a recording template
+  for ChatGPT, Perplexity, Gemini, Google AI Mode and Copilot; supplied answers
+  are separate evidence reported as observations, never scores.
+- Rubric 1.2.0 is unchanged. Discovery now fetches the starting page once even
+  when sitemaps succeed, to read its footer.
 
 ## Changes in 1.7.0
 

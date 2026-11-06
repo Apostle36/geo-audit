@@ -11,6 +11,13 @@ from run_contract import audit_run, comparable
 from safe_io import check_output, write_new
 
 
+def criterion_state(criterion):
+    """met, partly_met or not_met for an assessed criterion; otherwise its status."""
+    if criterion['status'] != 'assessed':
+        return criterion['status']
+    return {0: 'not_met', 50: 'partly_met', 100: 'met'}[criterion['value']]
+
+
 def compare(current_raw, previous_raw, *, action_state=None):
     current, previous = (strict_json(raw.decode('utf-8')) for raw in (current_raw, previous_raw))
     scores, _ = audit_run(current)
@@ -84,6 +91,9 @@ def compare(current_raw, previous_raw, *, action_state=None):
                   scores={'overall': delta(old_scores['overall'], scores['overall']),
                           'categories': {key: delta(old_scores['categories'][key]['score'], scores['categories'][key]['score'])
                                          for key in scores['categories']}},
+                  criteria=[{'category': new['category'], 'id': new['id'], 'previous': criterion_state(old),
+                             'current': criterion_state(new)}
+                            for new, old in zip(scores['criteria'], old_scores['criteria'], strict=True)],
                   coverage={'previous': coverage(previous), 'current': coverage(current)},
                   capture_conditions=capture_conditions,
                   matching='Exact category, normalised claim and page set. Wording changes require review.',

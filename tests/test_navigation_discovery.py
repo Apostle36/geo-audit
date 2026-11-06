@@ -22,11 +22,14 @@ class NavigationDiscovery(unittest.TestCase):
         self.assertEqual(paths.count('/'),1)
         validate_registry(evidence)
 
-    def test_successful_sitemap_does_not_trigger_navigation(self):
+    def test_successful_sitemap_uses_sitemap_candidates_and_inspects_the_start_page_once(self):
+        # Toolkit 1.8.0: the starting page is always captured once so its footer can name the legal pages.
         with serve_site() as (base,server):
-            summary,_=discover(Client(delay=0,allow_private=True,proxies={}),base+'/')
+            summary,evidence=discover(Client(delay=0,allow_private=True,proxies={}),base+'/')
         self.assertFalse(summary['navigation']['used'])
-        self.assertNotIn('/',[path for path,_ in server.requests])
+        self.assertTrue(all(item.get('source')!='navigation' for item in summary['candidates']))
+        self.assertEqual([path for path,_ in server.requests].count('/'),1)
+        self.assertEqual(evidence[-1]['id'],'discovery-navigation')
 
     def test_robots_denial_prevents_seed_fetch_and_candidates(self):
         routes={'/robots.txt':(200,{'Content-Type':'text/plain'},b'User-agent: *\nDisallow: /\n')}

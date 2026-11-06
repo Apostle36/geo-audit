@@ -12,6 +12,8 @@ from evidence import document_title, parse_timestamp
 from capture_quality import page_summary, review_prompts
 from capture_readiness import latest_browser_observations
 from finding_identity import disposition
+from claims import split_sentences
+import request_classes
 
 
 def safe_link(label, url):
@@ -70,8 +72,62 @@ def first_sentence(text):
 
 
 def action_preview(text):
-    """Prefer a complete first sentence to a cut-off instruction."""
-    return excerpt(first_sentence(text), 230)
+    """The complete first sentence of an instruction; never cut mid-sentence."""
+    return first_sentence(text)
+
+
+def action_label(finding):
+    """The analyst's short title (schema 1.5.0), else a complete first sentence, else the claim."""
+    if finding.get('title'):
+        return finding['title']
+    sentence = first_sentence(finding['fix'])
+    return sentence if len(sentence) <= 230 else finding['claim']
+
+
+SAFE_ID = re.compile(r'[A-Za-z0-9._-]{1,24}')
+
+
+def display_id(identifier):
+    return identifier if SAFE_ID.fullmatch(identifier) else ''
+
+
+STATE_LABELS = {'met': 'Met', 'partly_met': 'Partly met', 'not_met': 'Not met', 'unknown': 'Unknown',
+                'not_applicable': 'Not applicable'}
+
+
+def criterion_state(criterion):
+    if criterion['status'] != 'assessed':
+        return criterion['status']
+    return {0: 'not_met', 50: 'partly_met', 100: 'met'}[criterion['value']]
+
+
+def blocked_messages(blocked):
+    """One message per request class. Only content-bearing or unclassified blocks can change what is seen."""
+    classes = {}
+    for request in blocked:
+        url = request.get('url', '') if isinstance(request, dict) else ''
+        category = request_classes.classify(url)
+        try:
+            host = urlsplit(url).hostname
+        except ValueError:
+            host = None
+        entry = classes.setdefault(category, {'count': 0, 'hosts': set()})
+        entry['count'] += 1
+        if host:
+            entry['hosts'].add(host)
+    messages = []
+    for category in sorted(classes, key=lambda name: (request_classes.changes_content(name), name)):
+        entry = classes[category]
+        label = request_classes.label(category)
+        noun = 'resource request' if category == 'unclassified' else f'{label} request'
+        message = (f"{plural(entry['count'], noun)} blocked"
+                   + (f" ({', '.join(sorted(entry['hosts'])[:5])})" if entry['hosts'] else ''))
+        if request_classes.changes_content(category):
+            message += '; rendering fidelity needs review.'
+        else:
+            message += '; this cannot change the visible content.'
+        messages.append(message)
+    return messages
 
 
 def plural(count, singular, plural_form=None):
@@ -85,6 +141,11 @@ def review_date(value):
 def client_report_data(run, scores):
     # Data is passed through, not edited. Repeated narrative cannot safely be
     # semantically rewritten by a deterministic renderer.
+    if run.get('claim_check'):
+        from claim_check import export_blockers, status
+        problems = export_blockers(status(run))
+        if problems:
+            raise ValueError('Client export blocked by the claim check: ' + ' '.join(problems))
     return {'client_report': True, 'run': run, 'scores': scores,
             'overall_score': scores['overall'], 'url': run['metadata']['url']}
 
@@ -93,9 +154,13 @@ def report_model(run, scores=None):
     """One classification drives summary, plan, details and coverage labels."""
     ranks = {n: i for i, n in enumerate(('critical', 'high', 'medium', 'low', 'informational'))}
     findings = sorted(run['findings'], key=lambda f: ranks[f['severity']])
-    actions, verification, context = [], [], []
+    actions, verification, context, used = [], [], [], set()
     for index, finding in enumerate(findings, 1):
-        item = {'finding': finding, 'anchor': f'finding-{index}'}
+        anchor = 'finding-' + (re.sub(r'[^A-Za-z0-9_-]+', '-', finding['id']).strip('-') or str(index))
+        if anchor in used:
+            anchor += f'-{index}'
+        used.add(anchor)
+        item = {'finding': finding, 'anchor': anchor}
         if disposition(finding) == 'verification':
             verification.append(item)
         elif disposition(finding) == 'context':
@@ -221,9 +286,9 @@ class _ClientReport:
 
     def parts(self):
         return (self.head() + self.decision_summary() + self.what_changed() + self.action_plan()
-                + self.action_tracking() + self.contents()
-                + self.findings() + self.category_reviews() + self.capture_quality()
-                + self.collection_conditions() + self.outstanding() + self.method())
+                + self.owner_questions() + self.readiness_status() + self.action_tracking() + self.contents()
+                + self.findings() + self.strengths() + self.category_reviews() + self.visibility_plan()
+                + self.capture_quality() + self.collection_conditions() + self.outstanding() + self.method())
 
     # Shared fragments
 
@@ -246,6 +311,26 @@ class _ClientReport:
             warning = warning.replace(identifier, label)
         return warning.replace('no_structured_data_in_sample', 'no structured information in the sample')
 
+    def pages_label(self, urls, *, links=False):
+        """A count with up to three page names, never a clipped list."""
+        if set(urls) == self.sample and len(urls) > 1:
+            return f'All {len(urls)} sampled pages'
+        name = (lambda u: safe_link(self.labels[u], u)) if links else (lambda u: escape(self.labels[u]))
+        names = [name(u) for u in urls[:3]]
+        if len(urls) == 1:
+            return names[0]
+        # Page titles often contain commas, so names are separated by semicolons.
+        more = f'; and {len(urls) - 3} more' if len(urls) > 3 else ''
+        return f'{len(urls)} pages: ' + '; '.join(names) + more
+
+    def finding_link(self, identifier):
+        for group in ('actions', 'verification', 'context'):
+            for x in self.model[group]:
+                if x['finding']['id'] == identifier:
+                    label = display_id(identifier) or 'related finding'
+                    return jump(label, x['anchor'])
+        return ''
+
     def page_scope(self, urls):
         if set(urls) == self.sample:
             return paragraph('Applies to the declared sample.', 'scope')
@@ -265,8 +350,9 @@ class _ClientReport:
         f, anchor = item['finding'], item['anchor']
         kind = {'observation': 'Observed', 'recommendation': 'Recommendation',
                 'hypothesis': 'Hypothesis — verify first', 'unknown': 'Unresolved'}[f['kind']]
+        label = display_id(f['id'])
         parts = [f'<article class="finding" id="{anchor}">',
-                 paragraph(f"{kind} · {f['severity'].capitalize()} priority", 'eyebrow'),
+                 paragraph((f'{label} · ' if label else '') + f"{kind} · {f['severity'].capitalize()} priority", 'eyebrow'),
                  f'<h3{self.lang}>{escape(f["claim"])}</h3>',
                  self.page_scope(f['affected_urls'])]
         for key, title in [('observed', 'Evidence'), ('consequence', 'Why it matters'), ('fix', 'Recommended action'),
@@ -297,20 +383,22 @@ class _ClientReport:
                  '<h1>Website readiness review</h1>',
                  paragraph(self.meta['url'], 'site'),
                  paragraph(byline, 'byline'),
-                 '<h2>The decision summary</h2>',
-                 self.prose_paragraph(self.run['summary']),
-                 '<h3>Start here</h3>']
+                 '<h2>The decision summary</h2>']
+        from claim_check import status as claim_status
+        claims = claim_status(self.run)
+        if not claims['complete']:
+            parts.append(paragraph('Claims not yet checked: no complete, current independent claim check is recorded '
+                                   'for these findings.', 'claims-state'))
+        parts += [self.prose_paragraph(self.run['summary']), '<h3>Start here</h3>']
         if actions:
             parts.append('<ol class="priorities">' + ''.join(
-                '<li>' + jump(action_preview(x['finding']['fix']), x['anchor'], self.lang) + '</li>'
+                '<li>' + jump(action_label(x['finding']), x['anchor'], self.lang) + '</li>'
                 for x in actions[:3]) + '</ol>')
         else:
             parts.append(paragraph('No supported improvement actions were recorded. '
                                    'This does not establish a clean bill of health.'))
-        if self.scores['overall'] is None:
-            score_note = 'Overall core score withheld: at least one required area is incomplete.'
-        else:
-            score_note = 'Core scores and their precise scope are provided in the methodology appendix.'
+        score_note = ('Readiness status by area, and the actions that would change each check, follow the action plan. '
+                      'It is a coarse editorial status, not a precise score.')
         parts += ['<div class="coverage">',
                   paragraph(f"{plural(len(self.meta['sample']), 'page')} in the declared sample · "
                             f"{plural(len(actions), 'improvement action')} · "
@@ -346,25 +434,21 @@ class _ClientReport:
                            if self.tracking else 'Effort and ownership need scoping; the saved audit contains no estimates.'), 'intro')]
         if actions:
             parts.append('<table class="actions"><caption>Supported improvements</caption><thead><tr>'
-                         '<th scope="col">Priority</th><th scope="col">Action and evidence</th>'
+                         '<th scope="col">ID</th><th scope="col">Priority</th><th scope="col">Action and evidence</th>'
                          '<th scope="col">Affected pages</th></tr></thead><tbody>')
             for x in actions:
                 f = x['finding']
-                if set(f['affected_urls']) == self.sample:
-                    scope = 'Declared sample'
-                else:
-                    scope = '; '.join(self.labels[u] for u in f['affected_urls'])
-                parts.append(f'<tr><td data-label="Priority">{escape(f["severity"].capitalize())}</td>'
-                             f'<td data-label="Action">{jump(action_preview(f["fix"]), x["anchor"], self.lang)}</td>'
-                             f'<td data-label="Pages">{escape(excerpt(scope, 100))}</td></tr>')
+                parts.append(f'<tr><td data-label="ID">{escape(display_id(f["id"]))}</td>'
+                             f'<td data-label="Priority">{escape(f["severity"].capitalize())}</td>'
+                             f'<td data-label="Action">{jump(action_label(f), x["anchor"], self.lang)}</td>'
+                             f'<td data-label="Pages">{self.pages_label(f["affected_urls"])}</td></tr>')
             parts.append('</tbody></table>')
         else:
             parts.append(paragraph('No supported improvement actions were recorded.'))
         parts.append('<h3>Verify before changing</h3>')
         pending = [jump('Core check: ' + CRITERION_NAMES[c['id']], 'core-check-' + c['id'])
                    for c in self.model['core_unknown']]
-        pending += [jump(excerpt(x['finding']['claim'], 100), x['anchor'], self.lang)
-                    for x in self.model['verification']]
+        pending += [jump(x['finding']['claim'], x['anchor'], self.lang) for x in self.model['verification']]
         pending += [jump(x['label'], x['anchor']) for x in self.model['outstanding']]
         if pending:
             parts.append('<ul class="verification-index">' + ''.join(f'<li>{x}</li>' for x in pending) + '</ul>')
@@ -380,12 +464,14 @@ class _ClientReport:
         parts = ['<section id="what-changed"><h2>What changed</h2>',
                  paragraph('Compared with the audit dated ' + comparison['previous_date'] + ' using matching scope and rubric.'),
                  paragraph(' · '.join(f'{count} {name}' for name, count in comparison['counts'].items()), 'coverage')]
-        score = comparison['scores']['overall']
-        if score['change'] is None:
-            parts.append(paragraph('Overall score change withheld because one or both audits have incomplete core scores.'))
+        changed = [c for c in comparison.get('criteria', []) if c['previous'] != c['current']]
+        if changed:
+            parts.append('<ul class="status-changes">' + ''.join(
+                f"<li>{escape(CATEGORY_NAMES[c['category']])}: {escape(CRITERION_NAMES[c['id']])}: "
+                f"{STATE_LABELS.get(c['previous'], c['previous'])} → {STATE_LABELS.get(c['current'], c['current'])}</li>"
+                for c in changed) + '</ul>')
         else:
-            parts.append(paragraph(f"Core score: {score['previous']:g} → {score['current']:g} "
-                                   f"({score['change']:+g} points). This is an editorial readiness comparison."))
+            parts.append(paragraph('No core readiness check changed status. Numeric scores are in the technical export.'))
         for key, title in (('new', 'New findings'), ('recurring', 'Recurring findings'),
                            ('resolved', 'Resolved with evidence'), ('unresolved', 'Unresolved or awaiting verification')):
             rows = comparison['groups'][key]
@@ -465,12 +551,17 @@ class _ClientReport:
 
     def contents(self):
         entries = [('Findings and evidence', 'findings')]
+        if self.run.get('owner_questions'):
+            entries.insert(0, ('Questions for the owner', 'owner-questions'))
+        entries.insert(0, ('Readiness status', 'readiness-status'))
+        if self.model['context']:
+            entries.append(('Strengths to keep', 'strengths'))
         if self.comparison:
             entries.insert(0, ('What changed', 'what-changed'))
         if self.tracking:
             entries.insert(0, ('Action tracking', 'action-tracking'))
         entries += [(name, 'category-' + key) for key, name in CATEGORY_NAMES.items()]
-        entries += [('How each page was captured', 'capture-quality'),
+        entries += [('AI visibility: questions to test', 'ai-visibility'), ('How each page was captured', 'capture-quality'),
                     ('Outstanding checks and limitations', 'outstanding'), ('Scope and scoring method', 'method')]
         if self.browser_observations:
             entries.insert(-2, ('Browser capture conditions', 'capture-conditions'))
@@ -484,10 +575,103 @@ class _ClientReport:
             parts += [self.finding(x) for x in self.model['actions']]
         else:
             parts.append(paragraph('No supported improvement findings recorded.'))
-        if self.model['context']:
-            parts.append('<h3>Context and strengths to preserve</h3>')
-            parts += [self.finding(x) for x in self.model['context']]
         parts.append('</section>')
+        return parts
+
+    def strengths(self):
+        """Strengths are context, not actions: one short list. Full fields stay in the technical export."""
+        if not self.model['context']:
+            return []
+        parts = ['<section id="strengths"><h2>Strengths to keep</h2>',
+                 paragraph('These observations describe what already works. Keep them when pages change.', 'intro'),
+                 '<ul class="strengths">']
+        for x in self.model['context']:
+            f = x['finding']
+            evidence = split_sentences(f['observed'])[:1]
+            parts.append(f'<li id="{x["anchor"]}"><strong{self.lang}>{escape(f["claim"])}</strong> '
+                         f'<span class="scope">({self.pages_label(f["affected_urls"], links=True)})</span>'
+                         + (f' {self.prose(evidence[0])}' if evidence else '') + '</li>')
+        parts += ['</ul>', '</section>']
+        return parts
+
+    def owner_questions(self):
+        questions = self.run.get('owner_questions') or []
+        if not questions:
+            return []
+        parts = ['<section id="owner-questions"><h2>Questions for the owner</h2>',
+                 paragraph('Only you can answer these. Each answer settles a fact the report could not confirm.', 'intro')]
+        for q in questions:
+            links = ', '.join(filter(None, (self.finding_link(i) for i in q['finding_ids'])))
+            parts += ['<article class="owner-question">', f'<h3{self.lang}>{escape(q["question"])}</h3>',
+                      f'<p><strong>What we saw.</strong> {self.prose(q["seen"])}</p>',
+                      f'<p><strong>Why it matters.</strong> {self.prose(q["why"])}</p>',
+                      '<p><strong>Likely answers.</strong> ' + ' · '.join(self.prose(a) for a in q['likely_answers']) + '</p>']
+            if links:
+                parts.append(f'<p class="scope">Related: {links}</p>')
+            parts.append('</article>')
+        parts.append('</section>')
+        return parts
+
+    def readiness_status(self):
+        """Coarse status per check, with the actions that would change it. Numbers stay in the technical export."""
+        criteria = self.scores['criteria']
+        mapped = any('criteria' in f for f in self.run['findings'])
+        movers = self.model['actions'] + self.model['verification']
+        parts = ['<section id="readiness-status"><h2>Readiness status</h2>',
+                 paragraph('Each core check is met, partly met or not met across the sampled pages, or unknown when '
+                           'evidence is missing. This is a coarse editorial status, not a measurement of AI visibility '
+                           '— not a complete health score.', 'intro'),
+                 '<table class="status"><thead><tr><th scope="col">Area</th><th scope="col">Check</th>'
+                 '<th scope="col">Status</th><th scope="col">' + ('Actions that would change it' if mapped else
+                                                                 'Actions in this area') + '</th></tr></thead><tbody>']
+        for c in criteria:
+            state = criterion_state(c)
+            if state in ('met', 'not_applicable'):
+                related = []
+            elif mapped:
+                related = [x for x in movers if c['id'] in x['finding'].get('criteria', [])]
+            else:
+                related = [x for x in movers if x['finding']['category'] == c['category']]
+            links = ', '.join(jump(display_id(x['finding']['id']) or action_label(x['finding']), x['anchor'])
+                              for x in related) or ('—' if state in ('met', 'not_applicable') else 'None recorded')
+            parts.append(f'<tr><td>{escape(CATEGORY_NAMES[c["category"]])}</td><td>{escape(CRITERION_NAMES[c["id"]])}</td>'
+                         f'<td>{STATE_LABELS[state]}</td><td>{links}</td></tr>')
+        parts += ['</tbody></table>',
+                  paragraph('The website access checks cover crawl access and search directives. This status does '
+                            'not score speed, mobile usability or security; those are reviewed under Website access '
+                            'and technical foundations.', 'limit'), '</section>']
+        return parts
+
+    def visibility_plan(self):
+        plan = self.run.get('visibility')
+        platforms = ('ChatGPT', 'Perplexity', 'Gemini', 'Google AI Mode', 'Copilot')
+        parts = ['<section id="ai-visibility"><h2>AI visibility: questions to test</h2>']
+        observations = (plan or {}).get('observations') or []
+        if observations:
+            parts.append(paragraph('Recorded AI answers. These are observations of specific answers on specific dates, '
+                                   'not a score; answers vary by session, location and model version.', 'intro'))
+        else:
+            parts.append(paragraph('AI visibility was not measured in this audit. Ask each question below on each '
+                                   'platform, record what you see in the template, and repeat it after changes.', 'intro'))
+        if plan and plan.get('questions'):
+            parts.append('<ol class="visibility-questions">' + ''.join(
+                f'<li{self.lang}>{escape(q)}</li>' for q in plan['questions']) + '</ol>')
+        else:
+            parts.append(paragraph('No buyer question set was recorded in this run.'))
+        columns = ('Platform', 'Date', 'Brand named?', 'URLs cited', 'Competitors named')
+        head = '<table class="visibility"><thead><tr>' + ''.join(f'<th scope="col">{c}</th>' for c in columns)
+        if observations:
+            parts.append(head.replace('<th scope="col">Date</th>', '<th scope="col">Date</th><th scope="col">Question</th>')
+                         + '</tr></thead><tbody>')
+            for item in observations:
+                urls = ', '.join(safe_link(u, u) for u in item['cited_urls']) or 'None'
+                parts.append(f'<tr><td>{escape(item["platform"])}</td><td>{escape(item["date"])}</td>'
+                             f'<td>{item["question"] + 1}</td><td>{"Yes" if item["brand_named"] else "No"}</td>'
+                             f'<td>{urls}</td><td>{escape(", ".join(item["competitors"]) or "None")}</td></tr>')
+        else:
+            parts.append(head + '</tr></thead><tbody>' + ''.join(
+                f'<tr><td>{p}</td><td></td><td></td><td></td><td></td></tr>' for p in platforms))
+        parts += ['</tbody></table>', '</section>']
         return parts
 
     def category_reviews(self):
@@ -499,6 +683,9 @@ class _ClientReport:
             for title, item in assessed:
                 parts += ['<div class="review-topic">', f'<h3>{escape(title)}</h3>',
                           self.prose_paragraph(item['summary'])]
+                links = ', '.join(filter(None, (self.finding_link(i) for i in item.get('finding_ids', []))))
+                if links:
+                    parts.append(f'<p class="scope">Related findings: {links}</p>')
                 if set(item['affected_urls']) != self.sample:
                     parts.append(self.page_scope(item['affected_urls']))
                 parts += [self.sources(item['evidence_ids']), '</div>']
@@ -556,37 +743,22 @@ class _ClientReport:
                 f"conclusions ({escape('; '.join(examples[:3]))}{'; …' if len(examples) > 3 else ''}). {link}.</p>")
 
     def capture_quality(self):
-        states = {'met': 'content check met', 'unverified': 'saved; no content check configured',
-                  'timeout': 'content check timed out', 'not_recorded': 'saved; no content check recorded'}
-        rows = []
+        """Identical prompts collapse into one line; the per-page table is in the technical export."""
+        groups = {}
         for page in self.pages:
-            http = page['http']
-            if http['state'] == 'success':
-                response = f"HTTP {http['http_status']}" if http.get('http_status') else 'Saved (format not interpreted)'
-            else:
-                response = {'failed': 'Collection failed', 'unavailable': 'Not collected',
-                            'missing': 'No saved capture', 'other': 'Saved by another method'}[http['state']]
-            described = {viewport: states.get(item['readiness'], 'saved') if item['state'] == 'success'
-                         else {'failed': 'failed', 'unavailable': 'not collected'}[item['state']]
-                         for viewport, item in page['browser'].items()}
-            if len(described) == 2 and len(set(described.values())) == 1:
-                rendered = 'Desktop and mobile: ' + described['desktop']
-            else:
-                rendered = '; '.join(f'{viewport.capitalize()}: {text}' for viewport, text in described.items())
-            rendered = rendered or 'Not collected'
-            rows.append(f'<tr><td data-label="Page">{safe_link(self.labels[page["url"]], page["url"])}</td>'
-                        f'<td data-label="HTTP response">{escape(response)}</td>'
-                        f'<td data-label="Rendered">{escape(rendered)}</td>'
-                        f'<td data-label="Prompts">{escape("; ".join(page["prompts"]) or "None raised")}</td></tr>')
+            groups.setdefault(tuple(page['prompts']), []).append(page['url'])
+        lines = []
+        for prompts, urls in sorted(groups.items(), key=lambda pair: (not pair[0], -len(pair[1]))):
+            label = '; '.join(prompts) if prompts else 'No capture prompts raised'
+            lines.append(f'<li>{escape(label)}: {self.pages_label(urls, links=True)}</li>')
         return ['<section id="capture-quality"><h2>How each page was captured</h2>',
                 paragraph('Automatic prompts from the saved captures: error responses, unfollowed redirects, possible '
                           'bot challenges or "not found" pages, non-HTML bodies, unmet content checks and little '
                           'visible text. A prompt asks for review; it does not establish a defect. No prompt does not '
                           'establish complete or correct content. Conclusions that rely only on prompted captures need '
-                          'a named reviewer\'s qualification before a final report.', 'intro'),
-                '<table class="captures"><caption>Latest saved capture of each sampled page</caption><thead><tr>'
-                '<th scope="col">Page</th><th scope="col">HTTP response</th><th scope="col">Rendered</th>'
-                '<th scope="col">Review prompts</th></tr></thead><tbody>', *rows, '</tbody></table></section>']
+                          'a named reviewer\'s qualification before a final report. The per-page table is in the '
+                          'technical export.', 'intro'),
+                '<ul class="capture-groups">', *lines, '</ul></section>']
 
     def collection_conditions(self):
         if not self.browser_observations:
@@ -614,19 +786,9 @@ class _ClientReport:
                     messages.append('No viewport declaration was recorded.')
             blocked = values.get('blocked_requests')
             if isinstance(blocked, list) and blocked:
-                hosts = set()
-                for request in blocked[:150]:
-                    try:
-                        host = urlsplit(request.get('url', '')).hostname if isinstance(request, dict) else None
-                        if host:
-                            hosts.add(host)
-                    except ValueError:
-                        pass
-                messages.append(f'{plural(len(blocked), "resource request")} blocked'
-                                + (f' ({", ".join(sorted(hosts)[:5])})' if hosts else '')
-                                + '; rendering fidelity needs review.')
-            if messages:
-                caveats.setdefault(observation['url'], []).append(viewport.capitalize() + ': ' + ' '.join(messages))
+                messages += blocked_messages(blocked[:150])
+            for message in messages:
+                caveats.setdefault(message, {}).setdefault(viewport, []).append(observation['url'])
         parts = ['<section id="capture-conditions"><h2>Browser capture conditions</h2>',
                  paragraph(f"Latest saved observations by page and viewport: {counts['met']} configured content "
                            f"checks met; {counts['timeout']} timed out; "
@@ -634,9 +796,16 @@ class _ClientReport:
                  paragraph('Saving a snapshot establishes collection, not complete content. A met condition confirms '
                            'only the chosen document elements at that moment. These observations do not establish '
                            'site health, usability or accessibility.', 'limit')]
-        for url, messages in caveats.items():
-            parts += ['<div class="capture-condition">', f'<h3>{safe_link(self.labels[url], url)}</h3>',
-                      '<ul>' + ''.join(f'<li>{escape(message)}</li>' for message in messages) + '</ul></div>']
+        lines = []
+        for message, viewports in caveats.items():
+            pages = list(dict.fromkeys(url for urls in viewports.values() for url in urls))
+            if set(viewports) == {'desktop', 'mobile'} and set(viewports['desktop']) == set(viewports['mobile']):
+                where = 'Desktop and mobile'
+            else:
+                where = ' and '.join(v.capitalize() for v in viewports)
+            lines.append(f'<li>{where}: {escape(message)} — {self.pages_label(pages, links=True)}</li>')
+        if lines:
+            parts += ['<ul class="capture-conditions">', *lines, '</ul>']
         parts.append('</section>')
         return parts
 
@@ -650,25 +819,11 @@ class _ClientReport:
                  paragraph(f'Detailed review topics with a recorded assessment: {self.assessed} of {self.total}. '
                            'Some topics cover only a subset of pages; this is not whole-site completeness.'),
                  '<h3>Core readiness overview — not a complete health score</h3>',
-                 paragraph('Each criterion uses a coarse editorial anchor: 0 means none, 50 some, and 100 all '
-                           'applicable reviewed pages meet it. Category scores average two criteria. An unknown '
-                           'required criterion withholds its category score and the overall score. These values '
-                           'are not probabilities or measurements of AI visibility.'),
-                 '<table><caption>Core scores and exactly what they cover</caption><thead><tr>'
-                 '<th scope="col">Area / score</th><th scope="col">Scored checks</th></tr></thead><tbody>']
-        for category, row in scores['categories'].items():
-            score = 'Incomplete' if row['score'] is None else f'{row["score"]:g}/100'
-            checks = '; '.join(CRITERION_NAMES[x['id']] for x in scores['criteria'] if x['category'] == category)
-            if category == 'technical':
-                checks += ' (does not score speed, mobile usability or security)'
-            parts.append(f'<tr><td>{escape(CATEGORY_NAMES[category])}<br><strong>{score}</strong></td>'
-                         f'<td>{escape(checks)}</td></tr>')
-        if scores['overall'] is None:
-            overall = 'Overall core score is withheld because one or more required areas are incomplete.'
-        else:
-            overall = f'Overall core score: {scores["overall"]:g}/100.'
-        parts += ['</tbody></table>',
-                  paragraph(overall),
+                 paragraph('Ten core checks give a coarse, comparable status: met when all applicable reviewed pages '
+                           'meet the check, partly met when some do, and not met when none do. The status table follows '
+                           'the action plan. Numeric values and their calculation are in the technical export; they '
+                           'move in coarse steps and are not probabilities or measurements of AI visibility.')]
+        parts += [
                   paragraph(f'Core scoring methodology: {scores["rubric_version"]}. Evidence, collection dates and '
                             'integrity checks remain in the saved run. Raw captures are available through a '
                             'separate technical export. Links in this report point to live sources that may have '
@@ -696,8 +851,12 @@ def check_report_integrity(html, run, model):
     for target in re.findall(r'href="#([^"]+)"', html):
         if target not in anchors:
             raise ValueError(f'Missing report navigation target: {target}')
+    context = {id(x['finding']) for x in model['context']}
     for finding in run['findings']:
-        for key in ('claim', 'observed', 'consequence', 'fix', 'acceptance', 'confidence_reason'):
+        # Strengths are a compact list; their full fields stay in the technical export.
+        keys = ('claim',) if id(finding) in context else ('claim', 'observed', 'consequence', 'fix', 'acceptance',
+                                                          'confidence_reason')
+        for key in keys:
             if escape(finding[key]) not in html:
                 raise ValueError(f'Report lost finding detail: {key}')
     for x in model['outstanding']:
@@ -723,4 +882,13 @@ CLIENT_CSS += """
 .captures th:nth-child(1){width:27%}.captures th:nth-child(2){width:15%}.captures th:nth-child(3){width:24%}.captures th:nth-child(4){width:34%}
 @media(max-width:600px){.actions caption,.captures caption{display:block;width:auto}.captures thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}.captures,.captures tbody,.captures tr,.captures td{display:block}.captures tr{border-bottom:1px solid var(--border);padding:12px 0}.captures td{border:0;padding:4px 0}.captures td::before{content:attr(data-label) ': ';font-weight:650}}
 @media print{.captures{font-size:9pt}.captures th,.captures td{padding:7px 8px}#capture-quality>h2,#capture-quality>p{break-after:avoid}}
+"""
+
+# Readiness status, owner questions, visibility template and compact lists (toolkit 1.8.0).
+CLIENT_CSS += """
+.claims-state{border:2px dashed currentColor;padding:8px 14px;font-weight:650}
+.status td:nth-child(3){font-weight:650;white-space:nowrap}.status th:nth-child(1){width:26%}.status th:nth-child(2){width:34%}.status th:nth-child(3){width:14%}
+.strengths li,.capture-groups li,.capture-conditions li{margin:8px 0}.owner-question{padding:12px 0;border-bottom:1px solid var(--border)}
+.visibility th,.visibility td{height:28px}.visibility-questions{padding-left:32px}.actions th:nth-child(1){width:12%}.actions th:nth-child(2){width:11%}.actions th:nth-child(3){width:49%}.actions th:nth-child(4){width:28%}.actions td:first-child{white-space:nowrap}
+@media print{.owner-question,.strengths li,.status tr{break-inside:avoid}#readiness-status,#owner-questions{break-before:auto}}
 """

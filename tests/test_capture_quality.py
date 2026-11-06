@@ -12,10 +12,11 @@ from client_report import render_client_html
 from collect import Client, fetch
 from delivery import approve, readiness, validate_approval
 from new_run import skeleton
+from fixtures_v15 import deliverable, legacy
 from review_topics import TOPICS
 from run_contract import audit_run, report_data
 from test_collect_contract import serve, html, PROSE
-from test_reliability import ROOT
+from test_reliability import pdf, ROOT
 
 CHALLENGE = (403, {'Content-Type': 'text/html'},
              b'<!doctype html><title>Just a moment...</title><p>Verify you are human to continue.</p>')
@@ -51,7 +52,7 @@ def assessed_run(urls, records):
         item.update(status='assessed', evidence_ids=ids, summary='Reviewed across the sample.')
     run['summary'] = 'The sampled pages answer customer questions clearly.'
     run['limitations'] = ['AI visibility not measured.']
-    return run
+    return deliverable(run)
 
 
 def browser_record(identifier, url, dom, viewport='desktop', **measurements):
@@ -152,8 +153,7 @@ class ConclusionWarnings(unittest.TestCase):
 
     def test_older_schemas_receive_the_same_advisory_warnings(self):
         urls, records = collected(['/', '/gone'])
-        run = assessed_run(urls, records)
-        run['schema_version'] = '1.3.0'
+        run = legacy(assessed_run(urls, records), '1.3.0')
         self.assertTrue(any('HTTP 404 response' in warning for warning in audit_run(run)[1]))
 
 
@@ -199,7 +199,10 @@ class DeliveryAndReport(unittest.TestCase):
         report = render_client_html(report_data(assessed_run(urls, records)))
         self.assertIn('raised no prompts for the sampled pages; this does not confirm complete or correct content',
                       report)
-        self.assertIn('<td data-label="HTTP response">HTTP 200</td>', report)
+        # Toolkit 1.8.0: the per-page table is in the technical export; the client report collapses prompts.
+        self.assertIn('No capture prompts raised', report)
+        technical = pdf.generate_html(report_data(assessed_run(urls, records), technical=True))
+        self.assertIn('| HTTP 200 |', technical)
 
 
 class PageSummary(unittest.TestCase):

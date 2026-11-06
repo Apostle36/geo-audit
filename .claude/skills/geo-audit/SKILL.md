@@ -1,7 +1,7 @@
 ---
 name: geo-audit
 metadata:
-  version: "1.7.0"
+  version: "1.8.0"
 description: Website GEO and SEO readiness audit with saved evidence, explicit uncertainty, and optional measured AI visibility.
 ---
 
@@ -19,7 +19,7 @@ Configure `--ready-selector`, `--ready-min-count` and a bounded `--ready-timeout
 
 Resolve scripts/, agents/ and docs/ relative to this installed skill directory. In the repository use ../../../scripts/, ../../agents/ and ../../../docs/. Read docs/RUN-FORMAT.md and scripts/rubrics/1.2.0.json completely before collecting or assessing. Never assume the working directory or a user's home path. Run the --help of scripts/collect.py, scripts/new_run.py and the PDF script before starting. If rendering is unavailable, deliver validated run.json and HTML and disclose the limitation.
 
-Read docs/AUDIT-DEPTH.md and docs/CLIENT-REPORT.md completely. They restore the full diagnostic coverage, business-type adaptations and client-report requirements. The ten scored criteria are NOT a substitute for the detailed topics in scripts/review_topics.py. For new audits use run schema 1.4.0 with detailed `review` records; scoring remains on immutable rubric 1.2.0. Schema 1.4.0 rejects provenance problems that older schemas only report as warnings. Historical 1.2.0 and 1.3.0 runs remain readable and their missing detailed coverage stays visible.
+Read docs/AUDIT-DEPTH.md and docs/CLIENT-REPORT.md completely. They restore the full diagnostic coverage, business-type adaptations and client-report requirements. The ten scored criteria are NOT a substitute for the detailed topics in scripts/review_topics.py. For new audits use run schema 1.5.0 with detailed `review` records; scoring remains on immutable rubric 1.2.0. Schema 1.5.0 adds evidence source types, finding titles, excerpts and criteria, an entity register, owner questions, an AI visibility question set and an independent claim check, and rejects provenance and count problems that older schemas only report as warnings. Historical 1.2.0, 1.3.0 and 1.4.0 runs remain readable and their missing detailed coverage stays visible.
 
 ## Scope and evidence
 The guided workflow performs the discovery, sample selection, capture and skeleton creation described below. Reuse its checkpoint evidence and generated run.json. The individual helper commands below provide the equivalent manual path; collecting the same pages again is unnecessary.
@@ -35,6 +35,13 @@ The guided workflow performs the discovery, sample selection, capture and skelet
 
 Use the exact evidence, criterion and finding fields in docs/RUN-FORMAT.md. Every finding references recorded evidence, including a capture of each page it names. Separate observation, hypothesis, recommendation and unknown kinds; unknown findings also have unknown status. Failed collection is unknown, never absent. For searches say "not found in the searched sources" and preserve queries/dates. Collection-error diagnostics can support unknown findings, never positive/negative assessments. Validation warns when a page's conclusions cite only captures with capture prompts; cite a usable capture, mark the dependent checks unknown, or acknowledge the warning with a specific reason at approval. Never acknowledge a prompt you have not inspected. Hash captured UTF-8 text exactly. The record helper's --record-id mode generates hashes; supply actual collection time, source, method and status.
 
+## Toolkit 1.8.0 evidence rules
+- Legal pages (privacy, terms, cookies, legal notice, imprint) found in the starting page's footer or the sitemap are always sampled, outside the template counts. Never conclude that no page names a legal entity unless they were sampled. Compare a stated registered name with the official register, or raise an owner question.
+- Never type page counts. `audit.py sample` and `new_run.py` append a composition sentence computed from the saved sitemap; schema 1.5.0 rejects an "N of M <noun>" count that disagrees with it.
+- The browser blocks off-host requests. Each is classified from `scripts/data/request_classes.json`, and the workflow fetches each blocked script once without executing it. A served session-recording or heatmap tool gets its own finding (high severity when the privacy policy does not mention it); a referenced but unserved one gets a low finding.
+- Every evidence record has a `source_type` (audited_site, off_site, search_snippet, owner_statement). Every non-unknown finding has a short `title`, the `criteria` it would change and `excerpts` found verbatim in its cited evidence. A page "shows", "says" or "links to" something only when the excerpt is a capture of that page; a search-snippet fact says so in its sentence.
+- Facts only the owner can supply go in `owner_questions`, one plain question each, never as findings.
+
 ## Specialist analysis
 Use five roles when delegation is available, otherwise work sequentially:
 - geo-ai-visibility: citability of actual content passages.
@@ -45,10 +52,12 @@ Use five roles when delegation is available, otherwise work sequentially:
 Read the actual bundled agents/<role>.md file and pass its complete content when delegating; never resolve a role solely by a same-named global agent. A same-named project agent may be used only when its file hash matches the bundled file; its frontmatter limits it to the tools the role needs. Otherwise pass the bundled text to a general agent and instruct it to use only the tools in the role's `tools` line. Record the bundled path and SHA-256 in the collection log. Use sequential assessment if explicit role loading is not possible. Installed package-manifest.json records expected file hashes. Do not change global agents automatically.
 The optional geo-platform-analysis role records actual observations separately in a clearly labeled sidecar, outside the Phase 1 run/report contract. This package has no live-platform integration. Roles return evidence and criterion observations; the orchestrator owns final calculations. Do not invent tools.
 
+Run brand-radar first, or at least have it return the entity register (`entities`) before the other roles write: every business, client and person named, the spellings seen and where, the reference spelling from the entity's own site or an official register, and a status (confirmed, inconsistent, wrong, needs_owner). Pass the register to the other roles. A flagged name is never presented as a strength, and a fix recommends the reference spelling.
+
 Require each core role to return its detailed review topics with exact URLs, evidence and scoped conclusions, including positive observations and unknowns. Pass this requirement and the full bundled role text. Before writing the report, reconcile topics against scripts/review_topics.py. Complete missing work where tools allow; otherwise label it unknown with the reason. Do not equate successful JSON validation with a completed audit.
 
 ## Severity and current platform rules
-Critical means demonstrated widespread access/indexability failure or persistent server failures on essential pages. High requires a verified material problem on important pages, so hypotheses and unknown findings are never high or critical (schema 1.4.0 enforces this). Otherwise prioritize impact, affected coverage, confidence, and effort.
+Critical means demonstrated widespread access/indexability failure or persistent server failures on essential pages. High requires a verified material problem on important pages, so hypotheses and unknown findings are never high or critical (schemas 1.4.0 and 1.5.0 enforce this). Otherwise prioritize impact, affected coverage, confidence, and effort.
 - GPTBot is training; OAI-SearchBot is ChatGPT search; ChatGPT-User is user-triggered fetching. A training opt-out is not a search defect. Verify other providers' documented roles.
 - Missing llms.txt is an optional experiment, not an automatic issue or deduction.
 - Missing structured data alone is not Critical. Do not universally recommend speakable or remove valid HowTo solely because its rich result was retired.
@@ -64,6 +73,12 @@ Compare runs only when origin, language, market, sample, criteria, and rubric ma
 
 ## Optional observed visibility
 Record branded/non-branded prompts, platform/model, date, language, market, search mode, responses, and cited URLs. Repeat observations; distinguish mentions from citations and report sample size. Without this work explicitly state "AI visibility not measured".
+
+## Claim check before export
+After the findings are written, spawn the bundled `agents/geo-claim-check.md` role as a separate agent that did not write them. Give it `scripts/claim_check.py worklist run.json`; it returns one verdict per sentence (supported, search_only, unsupported). Record them with `claim_check.py record run.json verdicts.json --reviewer NAME --reviewer-type agent`. Fix or remove every unsupported sentence and re-check the changed ones: unsupported sentences block every client export, and a final export needs a complete, current check. Editing a checked sentence makes its verdict stale.
+
+## AI visibility question set
+Write the run's `visibility` inputs (services, customer types, market) and draft 15 to 20 buyer questions with `scripts/visibility.py draft`; edit them, then save with `visibility.py record`. The client report prints the questions and a recording template (platform and date, brand named, URLs cited, competitors named). Supplied answers are separate evidence and are reported as observations, never as scores.
 
 ## Report and PDF
 Client exports default to visibly labelled drafts. `scripts/delivery.py check run.json` lists delivery blockers. A named reviewer records an approval with `delivery.py approve` only after actually reviewing the findings, evidence and scope. Do not invent a reviewer or automatically attest on a person's behalf. Final client exports require `--final` and a current approval tied to the exact run bytes. Explicit exclusions need an authorised scope decision and a concrete reason; all exclusions and warning qualifications appear in final reports. Preserve earlier approvals and use a new named file after changes. See docs/WORKFLOW.md for commands.
@@ -81,4 +96,6 @@ Record access dates when verifying volatile claims:
 - https://web.dev/articles/optimize-lcp
 
 ## Report preparation
-Lead each finding’s fix with a short, complete action sentence. The generator uses it for linked priority previews; the full fix remains in the evidence section. State strengths as informational observations, and keep hypotheses separate from verified issues. Unknown detailed checks automatically enter the verification list. Never invent effort estimates to fill the action plan. The client report begins with a decision summary and action plan, followed by full findings, category reviews, outstanding work and methodology. Scores and evidence are unchanged.
+Give each finding a `title` of at most 90 characters: a short, complete action. The action plan shows it, never a clipped sentence, with affected pages as a count and up to three names. Lead each fix with a complete action sentence too; the full fix remains in the evidence section. State strengths as informational observations: the client report lists them in one short section and keeps their full fields in the technical export. Keep hypotheses separate from verified issues. Unknown detailed checks automatically enter the verification list. Never invent effort estimates to fill the action plan.
+
+The client report begins with a decision summary and action plan, then questions for the owner and a readiness status table (met, partly met, not met or unknown per core check, with the action IDs that would change it), followed by full findings, strengths, category reviews, the AI visibility question set, capture notes, outstanding work and methodology. Numeric scores appear only in the technical export and run comparisons. Identical capture prompts are collapsed; the per-page table is in the technical export. Review the export's page-budget warning: more pages than actions plus eight usually means repeated narrative. Scores and evidence are unchanged.

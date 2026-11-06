@@ -54,8 +54,13 @@ def install(directory, *, source_root=None, keep_backups=KEEP_BACKUPS):
                 root / 'scripts/browser_runtime.py', root / 'scripts/capture_readiness.py', root / 'docs/WORKFLOW.md',
                 root / 'scripts/actions.py', root / 'scripts/finding_identity.py', root / 'scripts/compare_runs.py',
                 root / 'scripts/report_context.py', root / 'scripts/capture_quality.py', root / 'docs/ACTIONS.md',
-                root / 'docs/AUDIT-DEPTH.md', root / 'docs/CLIENT-REPORT.md']
-    roles = ["geo-ai-visibility", "brand-radar", "geo-technical", "geo-content", "geo-schema", "geo-platform-analysis"]
+                root / 'docs/AUDIT-DEPTH.md', root / 'docs/CLIENT-REPORT.md',
+                root / 'scripts/claims.py', root / 'scripts/run_checks.py', root / 'scripts/sample_groups.py',
+                root / 'scripts/request_classes.py', root / 'scripts/legal_pages.py', root / 'scripts/claim_check.py',
+                root / 'scripts/visibility.py', root / 'scripts/data/request_classes.json',
+                root / 'scripts/data/legal_pages.json']
+    roles = ["geo-ai-visibility", "brand-radar", "geo-technical", "geo-content", "geo-schema", "geo-platform-analysis",
+             "geo-claim-check"]
     required += [agents / f"{role}.md" for role in roles]
     for path in required:
         if not path.is_file():

@@ -74,6 +74,11 @@ def readiness(run, *, exclusions=None, acknowledgements=None):
                 completed += 1
     if not completed:
         blockers.append('At least one assessed check must remain within the delivery scope.')
+    if run.get('schema_version') == '1.5.0':
+        from claim_check import blockers as claim_blockers
+        blockers += claim_blockers(run)
+        if run['visibility'] is None:
+            blockers.append('Prepare the AI visibility question set (15 to 20 buyer questions) before delivery.')
     return {'reviewable': not blockers, 'blockers': blockers, 'warnings': warnings,
             'exclusions': exclusions, 'acknowledgements': acknowledgements}
 

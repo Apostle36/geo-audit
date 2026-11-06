@@ -9,12 +9,17 @@ from capture_quality import conclusion_warnings
 from evidence import strict_json, validate_registry, resolve_ids, extract, structured_data_markers, parse_timestamp
 from score import calculate, nonempty, WEIGHTS
 from review_topics import TOPICS
+import run_checks
 from version import RUN_SCHEMA_VERSION, SUPPORTED_RUN_SCHEMAS
 
 # new_run.py marks every value a reviewer must replace with this text.
 PLACEHOLDER = "[skeleton placeholder]"
 # Captures much older than the audit date are probably reused from another run.
 STALE_CAPTURE = timedelta(days=180)
+# Schemas that reject provenance problems instead of reporting them as warnings.
+STRICT_PROVENANCE = {'1.4.0', '1.5.0'}
+FINDING_FIELDS = {"id", "category", "kind", "status", "affected_urls", "evidence_ids",
+                  "observed", "claim", "consequence", "fix", "acceptance", "severity", "confidence_reason"}
 
 
 def fields(value, required, label):
@@ -48,13 +53,16 @@ def audit_run(run):
     """
     version = run.get('schema_version') if isinstance(run, dict) else None
     required = {"schema_version", "metadata", "assessment", "summary", "limitations", "findings"}
-    if version in {'1.3.0', '1.4.0'}:
+    if version in {'1.3.0', '1.4.0', '1.5.0'}:
         required.add('review')
+    if version == '1.5.0':
+        required |= {'entities', 'owner_questions', 'claim_check', 'visibility'}
     fields(run, required, "Run")
     if version not in SUPPORTED_RUN_SCHEMAS:
         raise ValueError(f"Unsupported schema_version; new runs use {RUN_SCHEMA_VERSION}")
     meta = run["metadata"]
-    fields(meta, {"url", "date", "business_type", "market", "language", "sample", "sampling_rationale"}, "Metadata")
+    meta_fields = {"url", "date", "business_type", "market", "language", "sample", "sampling_rationale"}
+    fields(meta, meta_fields | ({"legal_pages"} if version == '1.5.0' else set()), "Metadata")
     web_url(meta["url"])
     for key in ("business_type", "market", "language", "sampling_rationale", "date"):
         nonempty(meta[key], key)
@@ -85,8 +93,7 @@ def audit_run(run):
         raise ValueError("findings must be a list")
     seen = set()
     for finding in run["findings"]:
-        fields(finding, {"id", "category", "kind", "status", "affected_urls", "evidence_ids",
-                         "observed", "claim", "consequence", "fix", "acceptance", "severity", "confidence_reason"}, "Finding")
+        fields(finding, FINDING_FIELDS | ({"title", "excerpts", "criteria"} if version == '1.5.0' else set()), "Finding")
         for key in ("id", "category", "kind", "status", "observed", "claim", "consequence", "fix", "acceptance", "severity", "confidence_reason"):
             nonempty(finding[key], f"finding {key}")
         if finding["id"] in seen:
@@ -110,12 +117,19 @@ def audit_run(run):
                 raise ValueError("Affected URL is outside the declared sample")
         resolve_ids(finding["evidence_ids"], registry, require_success=finding["kind"] != "unknown")
     if version != '1.2.0':
-        validate_review(run['review'], meta['sample'], registry)
+        validate_review(run['review'], meta['sample'], registry, strict=version == '1.5.0')
     issues = provenance_issues(run, registry, scores)
-    if version == RUN_SCHEMA_VERSION and issues:
+    if version in STRICT_PROVENANCE and issues:
         raise ValueError("; ".join(issues))
-    warnings = [f"Schema {version} accepts this, schema {RUN_SCHEMA_VERSION} rejects it: {issue}" for issue in issues]
-    return scores, warnings + advisory_warnings(run, registry)
+    counts = run_checks.count_problems(run, registry)
+    if version == '1.5.0':
+        strict = run_checks.strict_issues(run, registry, scores) + counts
+        if strict:
+            raise ValueError("; ".join(strict))
+        counts = []
+    warnings = [f"Schema {version} accepts this, schema 1.4.0 rejects it: {issue}" for issue in issues]
+    warnings += [f"Schema {version} accepts this, schema 1.5.0 rejects it: {issue}" for issue in counts]
+    return scores, warnings + advisory_warnings(run, registry) + run_checks.advisory(run, registry)
 
 
 def provenance_issues(run, registry, scores):
@@ -195,12 +209,13 @@ def run_text(run):
             yield from (item.get(key, "") for key in ("rationale", "reason"))
 
 
-def validate_review(review, sample, registry):
+def validate_review(review, sample, registry, *, strict=False):
     if not isinstance(review, list):
         raise ValueError('review must be a list')
     seen = set()
     for item in review:
-        fields(item, {'category', 'topic', 'status', 'summary', 'affected_urls', 'evidence_ids'}, 'Review item')
+        fields(item, {'category', 'topic', 'status', 'summary', 'affected_urls', 'evidence_ids'}
+               | ({'finding_ids'} if strict else set()), 'Review item')
         for key in ('category', 'topic', 'status', 'summary'):
             nonempty(item[key], f'review {key}')
         pair = (item['category'], item['topic'])
@@ -271,13 +286,31 @@ def report_data(run, *, technical=False, evidence_limit=None):
         f"N/A reason: {item.get('reason', 'none')}\n"
         f"Evidence: {', '.join(item.get('evidence_ids', [])) or 'none'}"
         for item in scores["criteria"]))
+    def shown(value):
+        if isinstance(value, list) and all(isinstance(v, str) for v in value):
+            return ', '.join(value)
+        return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
     for item in run["findings"]:
         section(f"Finding {item['id']}", "\n".join(
-            f"{key.replace('_', ' ').capitalize()}: {', '.join(value) if isinstance(value, list) else value}"
-            for key, value in item.items()))
+            f"{key.replace('_', ' ').capitalize()}: {shown(value)}" for key, value in item.items()))
     for item in run.get('review', []):
         section(f"Detailed review {item['category']}.{item['topic']}", '\n'.join(
-            f"{key}: {', '.join(value) if isinstance(value, list) else value}" for key, value in item.items()))
+            f"{key}: {shown(value)}" for key, value in item.items()))
+    from capture_quality import page_summary
+    rows = []
+    for page in page_summary(meta['sample'], run['assessment']['evidence']):
+        http = page['http']
+        browser = '; '.join(f"{viewport}: {item.get('readiness') or item['state']}" for viewport, item in page['browser'].items())
+        rows.append(f"{page['url']} | HTTP {http.get('http_status') or http['state']} | {browser or 'not collected'} | "
+                    f"{'; '.join(page['prompts']) or 'no prompts'}")
+    section('Latest saved capture of each sampled page', 'Page | HTTP response | Rendered | Review prompts\n' + '\n'.join(rows))
+    for key, title in (('entities', 'Entity register'), ('owner_questions', 'Questions for the owner'),
+                       ('claim_check', 'Claim check'), ('visibility', 'AI visibility plan and observations')):
+        if key in run:
+            section(title, json.dumps(run[key], ensure_ascii=False, indent=2))
+    if run.get('schema_version') == '1.5.0':
+        from claim_check import status as claim_status
+        section('Claim check status', json.dumps(claim_status(run), ensure_ascii=False, indent=2))
     for item in run["assessment"]["evidence"]:
         content = item["content"]
         if evidence_limit is not None and len(content) > evidence_limit:
