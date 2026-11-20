@@ -28,7 +28,10 @@ class InstallContract(unittest.TestCase):
                              'scripts/delivery.py', 'scripts/browser_collect.py', 'scripts/browser_runtime.py',
                              'scripts/capture_readiness.py', 'scripts/actions.py', 'scripts/finding_identity.py',
                              'scripts/compare_runs.py', 'scripts/report_context.py', 'scripts/capture_quality.py',
-                             'docs/ACTIONS.md'):
+                             'docs/ACTIONS.md', 'scripts/claims.py', 'scripts/run_checks.py', 'scripts/sample_groups.py',
+                             'scripts/request_classes.py', 'scripts/legal_pages.py', 'scripts/claim_check.py',
+                             'scripts/visibility.py', 'scripts/data/request_classes.json',
+                             'scripts/data/legal_pages.json', 'agents/geo-claim-check.md'):
                 self.assertIn(resource, manifest)
             for name, digest in manifest.items():
                 self.assertEqual(hashlib.sha256((destination / name).read_bytes()).hexdigest(), digest)

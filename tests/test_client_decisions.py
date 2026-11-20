@@ -35,15 +35,16 @@ class ClientDecisions(unittest.TestCase):
         self.assertEqual(len(model['verification']),1)
         output=self.render(run)
         self.assertIn('Hypothesis — verify first',output)
-        self.assertIn('href="#finding-1"',output)
+        self.assertIn('href="#finding-F1"',output)
 
     def test_long_fix_is_preserved_once_with_short_linked_previews(self):
         run=detailed_run()
         run['findings'][0].update(severity='high',fix='A sufficiently long recommendation '+('with exact evidence and completion detail '*20)+'FINAL_UNIQUE_FIX')
         output=self.render(run)
+        # Toolkit 1.8.0: previews are never cut mid-sentence; an over-long first sentence falls back to the claim.
         self.assertEqual(output.count('FINAL_UNIQUE_FIX'),1)
-        self.assertIn('…</a>',output)
-        self.assertEqual(output.count('id="finding-1"'),1)
+        self.assertNotIn('…</a>',output)
+        self.assertEqual(output.count('id="finding-F1"'),1)
 
     def test_not_applicable_is_explained_but_not_unresolved(self):
         run=detailed_run()
@@ -59,10 +60,11 @@ class ClientDecisions(unittest.TestCase):
         self.assertNotIn('onclick=',output)
         self.assertNotIn('<script>',output)
         self.assertIn('&lt;script&gt;',output)
-        self.assertIn('id="finding-1"',output)
+        self.assertIn('id="finding-bad-onclick-alert-1"',output)
 
     def test_integrity_rejects_lost_detail_and_broken_link(self):
         run=detailed_run()
+        run['findings'][0]['severity']='low'
         output=self.render(run)
         model=report_model(run)
         with self.assertRaises(ValueError):
@@ -95,7 +97,7 @@ class ClientDecisions(unittest.TestCase):
         output=self.render(run)
         check_report_integrity(output,run,report_model(run))
         for i in range(1,6):
-            self.assertIn(f'id="finding-{i}"',output)
+            self.assertIn(f'id="finding-F{i}"',output)
 
     def test_unknown_core_check_is_not_hidden_by_complete_detailed_reviews(self):
         from review_topics import TOPICS

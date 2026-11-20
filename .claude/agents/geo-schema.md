@@ -57,10 +57,36 @@ Mark both core criteria `no_structured_data_in_sample` only when no JSON-LD,
 Microdata or typed RDFa appears in any sampled capture; schema 1.4.0 rejects
 that exclusion when the cited captures contain such markup.
 
+## Entity consistency
+
+Check that markup names agree with the entity register's reference spellings. Do not describe a
+markup value as consistent when the register marks that entity `inconsistent` or `wrong`.
+
+## Evidence rules (toolkit 1.8.0)
+
+- Read the run's entity register (`entities`) before writing. Never present a name it marks
+  `inconsistent`, `wrong` or `needs_owner` as a strength or a useful concrete fact, even in paraphrase.
+- Give every finding a one-line `title` (at most 90 characters, a complete action), the rubric
+  `criteria` it would change, and `excerpts`: the exact text or `href` in the cited evidence that each
+  factual sentence relies on. The contract fails when an excerpt is not in that record.
+- Say a page "shows", "says", "links to", "lists" or "names" something only when the excerpt comes
+  from a capture of that page. A fact that rests on a search-result snippet must say so in its own
+  sentence ("A search result gives…"). An owner statement is never an on-page observation.
+- Facts only the owner can supply (a registered name, dates, the source of a figure, a colleague's
+  spelling) are `owner_questions`, not findings with a confidence level. Write one plain question
+  that says what was seen, why it matters and the likely answers, for example: "Your case study names
+  the client 'Northwind AD'. Public sources say the company is Contoso Holdings AD and Northwind is its
+  brand. Should the site say 'Northwind' or 'Northwind (Contoso Holdings AD)'?"
+- In review topics, list related findings in `finding_ids` and add only what is new. Do not restate a
+  finding; the contract warns when a topic repeats one.
+- Never type page counts. Use the composition sentence computed from the sitemap.
+- An independent claim checker re-reads every factual sentence before export. Unsupported sentences
+  block the report.
+
 ## Working rules
 
 - Follow the bundled orchestrator (SKILL.md) and docs/RUN-FORMAT.md. New runs use
-  run schema 1.4.0; core scoring stays on the immutable rubric 1.2.0.
+  run schema 1.5.0; core scoring stays on the immutable rubric 1.2.0.
 - Share the saved sample captures rather than independently refetching pages.
 - Use the exact RUN-FORMAT field names and keep observation, hypothesis,
   recommendation and unknown findings separate. A finding cites a capture of

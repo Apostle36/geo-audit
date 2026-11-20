@@ -518,9 +518,12 @@ def describe(requested, chain, final_text, notes, binary):
     return "\n".join(lines)
 
 
-def record(identifier, source, collected_at, content, status):
-    return {"id": identifier, "source": source, "collected_at": collected_at, "method": METHOD,
-            "content": content, "status": status, "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest()}
+def record(identifier, source, collected_at, content, status, source_type=None):
+    value = {"id": identifier, "source": source, "collected_at": collected_at, "method": METHOD,
+             "content": content, "status": status, "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest()}
+    if source_type:
+        value["source_type"] = source_type
+    return value
 
 
 def host_twins(url):
@@ -577,8 +580,18 @@ def robots_record(client, url, prefix):
     return robots, record(identifier, robots.url, now(), content, "failed" if chain else "unavailable")
 
 
-def capture_page(client, identifier, url, raw_dir):
-    """Capture one sample URL. Returns (evidence record, log entry)."""
+def legal_links(html, origin, final_url):
+    """Same-site legal links (privacy, terms, cookies, imprint) from a page footer."""
+    from legal_pages import legal_links as found
+    return found(html, origin, final_url)
+
+
+def capture_page(client, identifier, url, raw_dir, *, summary_only=False, extra_notes=()):
+    """Capture one URL. Returns (evidence record, log entry).
+
+    summary_only records the status, type, size and SHA-256 of the body instead of its text; it is used
+    for scripts the browser blocked, which are checked without being executed or embedded.
+    """
     robots, _ = client.robots(url)
     log = {"id": identifier, "url": url, "robots_for_collector": robots.decision(TOKEN, url)}
     refusal = client.refusal(url)
@@ -601,6 +614,12 @@ def capture_page(client, identifier, url, raw_dir):
         write_new(raw_path, final.body)
     binary = f"[Binary body omitted: {final.header('content-type') or 'unknown type'}, {len(final.body):,} bytes, " \
              f"SHA-256 {digest}]"
+    notes += list(extra_notes)
+    if summary_only:
+        if final.status >= 400:
+            notes.append(f"Referenced but not served: the request returned HTTP {final.status}.")
+        text = (f"[Body summary: {final.header('content-type') or 'unknown type'}, {len(final.body):,} bytes, "
+                f"SHA-256 {digest}. The body was not executed or embedded.]")
     content = describe(url, chain, text, notes, binary)
     log.update(status="success", http_status=final.status, final_url=final.url,
                redirects=[{"status": hop.status, "from": hop.url, "to": hop.location} for hop in chain[:-1]],
@@ -736,6 +755,9 @@ def navigation_discovery(client, origin, id_prefix, limit, raw_dir=None):
             or not any(kind in (response.header('content-type') or '').lower() for kind in ('text/html', 'application/xhtml+xml'))
             or 'possible_challenge' in log['flags'] or 'possible_soft_404' in log['flags']):
         return [], captured, {**log, 'reason': 'No usable, in-scope HTML navigation response was observed.'}
+    from legal_pages import legal_links as footer_legal
+    log['legal_candidates'] = [item for item in footer_legal(text, origin, response.url)
+                               if not client.refusal(item['loc'])]
     candidates, counts = navigation_candidates(text, origin, response.url, limit)
     allowed = [item for item in candidates if not client.refusal(item['loc'])
                and robots_for(client, item['loc']).decision(TOKEN, item['loc'])['allowed']]
@@ -815,13 +837,21 @@ def discover(client, origin, *, agents=REPORT_AGENTS, max_sitemaps=MAX_SITEMAPS,
     elif queue:
         truncated = True
         notes.append(f"Stopped after {max_sitemaps} sitemaps; {len(queue)} more were not fetched")
-    navigation = {'used': False}
-    if not candidates and navigation_fallback:
+    navigation, legal = {'used': False}, []
+    if navigation_fallback:
+        # The starting page is always inspected once: its footer names the legal pages, and its links are the
+        # fallback candidate list when sitemaps yield nothing. The capture is reused if the page is sampled.
         found, capture, navigation = navigation_discovery(client, origin, id_prefix,
                                                          min(max_urls, MAX_NAVIGATION_URLS), raw_dir)
         evidence.append(capture)
-        candidates.update((item['loc'], item) for item in found)
-        notes.append('Sitemap discovery yielded no candidates; inspected one starting page for bounded navigation links.')
+        legal = navigation.pop('legal_candidates', [])
+        navigation['used'] = not candidates
+        if not candidates:
+            candidates.update((item['loc'], item) for item in found)
+            notes.append('Sitemap discovery yielded no candidates; inspected one starting page for bounded navigation links.')
+    from legal_pages import is_legal_url
+    legal += [{'loc': url, 'label': '', 'source': 'sitemap'} for url in candidates
+              if is_legal_url(url) and url not in [item['loc'] for item in legal]]
     by_origin = {}
     for url in candidates:
         parts = urlsplit(url)
@@ -843,7 +873,7 @@ def discover(client, origin, *, agents=REPORT_AGENTS, max_sitemaps=MAX_SITEMAPS,
     summary = {"origin": origin, "collected_at": now(), "collector": USER_AGENT, "robots": robots.summary(),
                "agents": report, "sitemaps": sitemaps, "candidates": list(candidates.values()),
                "candidate_count": len(candidates), "out_of_scope": out_of_scope, "truncated": truncated,
-               "notes": notes, "navigation": navigation}
+               "notes": notes, "navigation": navigation, "legal_candidates": legal}
     return summary, evidence
 
 
@@ -856,8 +886,13 @@ def allowed_for(client):
     return lambda target: robots_for(client, target).decision(TOKEN, target)["allowed"]
 
 
-def fetch(client, urls, raw_dir, *, agents=REPORT_AGENTS, id_prefix="page"):
-    """Capture each URL once. Returns (evidence records, log)."""
+def fetch(client, urls, raw_dir, *, agents=REPORT_AGENTS, id_prefix="page", summary_only=False, classify=False,
+          source_type=None):
+    """Capture each URL once. Returns (evidence records, log).
+
+    classify adds the request class from scripts/data/request_classes.json to each record (blocked-script
+    checks); source_type labels the records for run schema 1.5.0.
+    """
     problems = check_urls(urls)
     if problems:
         raise ValueError("; ".join(problems))
@@ -868,13 +903,23 @@ def fetch(client, urls, raw_dir, *, agents=REPORT_AGENTS, id_prefix="page"):
             robots_ids.add(robots_evidence["id"])
             evidence.append(robots_evidence)
         identifier = f"{id_prefix}-{index:02d}"
+        notes = []
+        if classify:
+            import request_classes
+            category = request_classes.classify(url)
+            notes = [f"Blocked-script check: fetched once without executing it; request class from "
+                     f"request_classes.json {request_classes.load()['version']}.",
+                     f"Classification: {category} ({request_classes.label(category)})"]
         try:
-            page, entry = capture_page(client, identifier, url, raw_dir)
+            options = {key: value for key, value in (('summary_only', summary_only), ('extra_notes', notes)) if value}
+            page, entry = capture_page(client, identifier, url, raw_dir, **options)
         except Exception as error:  # One hostile response must not discard the rest of the batch.
             reason = f"{type(error).__name__}: {error}"
             page = record(identifier, url, now(), f"Request: GET {url}\nCollection failed: {reason}", "failed")
             entry = {"id": identifier, "url": url, "status": "failed", "notes": [reason]}
         entry["robots_reported"] = {agent: robots.decision(agent, url) for agent in agents}
+        if source_type:
+            page = record(page["id"], page["source"], page["collected_at"], page["content"], page["status"], source_type)
         evidence.append(page)
         entries.append(entry)
     validate_registry(evidence)
@@ -932,6 +977,11 @@ def main():
     get.add_argument("urls", nargs="*")
     get.add_argument("--urls-file", type=Path, help="One URL per line; blank lines and # comments are ignored")
     get.add_argument("--id-prefix", default="page")
+    get.add_argument("--summary-only", action="store_true",
+                     help="Record status, type, size and SHA-256 of each body instead of its text (blocked scripts)")
+    get.add_argument("--classify", action="store_true", help="Add the request class from scripts/data/request_classes.json")
+    get.add_argument("--source-type", choices=("audited_site", "off_site"),
+                     help="Label records for run schema 1.5.0 (default: inferred later from the host)")
     for command in (find, get):
         command.add_argument("--agent", action="append", help="Crawler token to report (repeatable)")
         command.add_argument("--delay", type=delay_value, default=MIN_DELAY, help="Seconds between requests to a host")
@@ -973,7 +1023,8 @@ def main():
                 check_new(target)
             raw_dir = args.output / "raw"
             raw_dir.mkdir(exist_ok=True)
-            evidence, log = fetch(client, urls, raw_dir, agents=agents, id_prefix=args.id_prefix)
+            evidence, log = fetch(client, urls, raw_dir, agents=agents, id_prefix=args.id_prefix,
+                                  summary_only=args.summary_only, classify=args.classify, source_type=args.source_type)
             write_new(targets[0], dump(evidence))
             write_new(targets[1], dump(log))
             print(json.dumps({"evidence": str(targets[0]), "log": str(targets[1]), **log["counts"]}, indent=2))

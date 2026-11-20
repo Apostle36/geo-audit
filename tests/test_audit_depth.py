@@ -46,7 +46,9 @@ class AuditDepth(unittest.TestCase):
         self.assertIn('page-1', technical)
 
     def test_all_finding_details_are_preserved(self):
+        # Improvement findings keep every field; strengths are a compact list (see test_compact_report).
         run = detailed_run()
+        run['findings'][0]['severity'] = 'low'
         for key in ('observed', 'claim', 'consequence', 'fix', 'acceptance', 'confidence_reason'):
             run['findings'][0][key] = f'UNIQUE_{key}_MARKER'
         html = pdf.generate_html(report_data(run))
@@ -149,6 +151,7 @@ class AuditDepth(unittest.TestCase):
         record.update(id='external', source='https://[invalid')
         run['assessment']['evidence'].append(record)
         run['findings'][0]['evidence_ids'].append('external')
+        run['findings'][0]['severity'] = 'low'
         html = pdf.generate_html(report_data(run))
         self.assertIn('https://[invalid', html)
         self.assertNotIn('href="https://[invalid', html)

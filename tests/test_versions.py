@@ -49,7 +49,7 @@ class Versions(unittest.TestCase):
                 self.assertFalse(tools & {'Write', 'Edit'})
                 if path.stem in CORE_ROLES:
                     self.assertIn(f'run schema {RUN_SCHEMA_VERSION}', path.read_text(encoding='utf-8'))
-        self.assertEqual(len(descriptions), 6)
+        self.assertEqual(len(descriptions), 7)
 
     def test_no_stale_schema_instructions_remain(self):
         for path in [*AGENTS.glob('*.md'), ROOT / '.claude/skills/geo-audit/SKILL.md', ROOT / 'CLAUDE.md']:

@@ -836,6 +836,26 @@ def render_to_pdf(html_path: Path) -> bytes:
 # Entry point
 # ---------------------------------------------------------------------------
 
+PAGE_OVERHEAD = 8  # Front matter, status table, method appendix and page inventory.
+
+
+def pdf_page_count(pdf_bytes):
+    """Pages in a rendered PDF, read from the page tree without a PDF library."""
+    counts = [int(value) for value in re.findall(rb'/Type\s*/Pages\b[^>]*?/Count\s+(\d+)', pdf_bytes)]
+    counts += [int(value) for value in re.findall(rb'/Count\s+(\d+)[^>]*?/Type\s*/Pages\b', pdf_bytes)]
+    return max(counts) if counts else len(re.findall(rb'/Type\s*/Page\b(?!s)', pdf_bytes))
+
+
+def page_budget_warning(*, pages, actions):
+    """A client report should not need much more than one page per supported action."""
+    budget = actions + PAGE_OVERHEAD
+    if pages > budget:
+        return (f'Page budget: {pages} pages for {actions} actions (budget {budget}: one page per action plus '
+                f'{PAGE_OVERHEAD}). Look for repeated narrative, long review summaries or capture detail that belongs '
+                'in the technical export.')
+    return None
+
+
 def export_report(report_path, output_path, *, overwrite=False, legacy_markdown=False, technical=False,
                   content_lang=None, final=False, approval_path=None, previous_path=None, actions_path=None):
     from evidence import strict_json
@@ -874,7 +894,7 @@ def export_report(report_path, output_path, *, overwrite=False, legacy_markdown=
     html = generate_html(data, content_lang)
     if output_path.suffix.lower() == ".html":
         atomic_write(report_path, output_path, html.encode("utf-8"), overwrite)
-        return
+        return {'pages': None, 'warnings': []}
     with tempfile.TemporaryDirectory(prefix="geo-audit-render-") as temp_dir:
         tmp = Path(temp_dir) / "report.html"
         tmp.write_text(html, encoding="utf-8")
@@ -882,6 +902,14 @@ def export_report(report_path, output_path, *, overwrite=False, legacy_markdown=
     if not pdf_bytes.startswith(b"%PDF-"):
         raise ValueError("Renderer did not return a PDF")
     atomic_write(report_path, output_path, pdf_bytes, overwrite)
+    info = {'pages': pdf_page_count(pdf_bytes), 'warnings': []}
+    if data.get('client_report'):
+        from client_report import report_model
+        actions = len(report_model(data['run'], data['scores'])['actions'])
+        warning = page_budget_warning(pages=info['pages'], actions=actions)
+        if warning:
+            info['warnings'].append(warning)
+    return info
 
 
 def main() -> None:
@@ -899,12 +927,14 @@ def main() -> None:
     add_arguments(parser)
     args = parser.parse_args()
     try:
-        export_report(args.report, args.output, overwrite=args.overwrite, legacy_markdown=args.legacy_markdown,
-                      technical=args.technical, content_lang=args.content_lang, final=args.final,
-                      approval_path=args.approval, previous_path=args.compare, actions_path=args.actions)
+        info = export_report(args.report, args.output, overwrite=args.overwrite, legacy_markdown=args.legacy_markdown,
+                             technical=args.technical, content_lang=args.content_lang, final=args.final,
+                             approval_path=args.approval, previous_path=args.compare, actions_path=args.actions)
     except Exception as exc:
         parser.exit(2, f"Report failed: {exc}\n")
-    print(f"Saved {args.output}")
+    for warning in (info or {}).get('warnings', []):
+        print(warning, file=sys.stderr)
+    print(f"Saved {args.output}" + (f" ({info['pages']} pages)" if info and info.get('pages') else ''))
 
 
 if __name__ == "__main__":

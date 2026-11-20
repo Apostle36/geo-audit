@@ -23,6 +23,34 @@ qualification before a final export, and the report shows that qualification.
 Passing action reviews whose evidence carries prompts say so under "Resolved
 with evidence".
 
+Since 1.8.0 the client report shows no numeric score. A **readiness status** table
+gives each core check as met, partly met, not met or unknown, with the action IDs
+(finding IDs whose `criteria` include that check) that would change it; runs
+without `criteria` list the actions in the same area instead. Numeric scores stay
+in the technical export, `run_contract.py` output and `compare_runs.py`, and
+"What changed" lists criterion status changes rather than point deltas. Rubric 1.2.0
+moves in coarse steps, so a client should not read the old number as precise.
+
+**Questions for the owner** gathers every fact only the owner can supply into one
+section after the action plan: what was seen, why it matters and the likely
+answers. The **AI visibility** section lists the run's 15–20 buyer questions and a
+recording template (platform, date, brand named, URLs cited, competitors named), or
+the recorded observations when answers were collected. A draft without a complete,
+current claim check shows "Claims not yet checked"; unsupported sentences block
+export entirely.
+
+Presentation is compact: the action plan uses the analyst's title (or, for older
+runs, the complete first sentence of the fix, or the claim when that sentence is
+too long) and never cuts a sentence; affected pages show as a count with up to
+three names. Strengths are one short list of claims, pages and one sentence of
+evidence; their full fields are in the technical export. Identical capture prompts
+and browser conditions collapse into one line with a page count, the per-page
+capture table is in the technical export, and blocked analytics, recording,
+advertising or consent requests (classified from `scripts/data/request_classes.json`)
+no longer raise "rendering fidelity". Review topics link their findings instead of
+restating them. PDF exports report their page count and warn when it exceeds the
+number of actions plus eight.
+
 List the complete sampled-page inventory once in the appendix. Do not repeat it
 under every observation. Full-sample observations inherit the report scope;
 partial observations name only the relevant pages in natural language. Keep
@@ -33,8 +61,8 @@ not just a checklist status. The summary must not replace substantive detail.
 ## Required content
 
 1. Executive summary: what was reviewed, main conclusion, first actions, limits.
-2. Priorities and core score overview with clear interpretation and unknowns.
-   The ten core scores are not full technical health or AI recommendation odds.
+2. Priorities, owner questions and the readiness status of the ten core checks,
+   with unknowns. They are not full technical health or AI recommendation odds.
 3. Five category deep dives: what works, detailed topic coverage, findings,
    affected pages, relevant sources, why it matters, fix and completion check.
 4. A prioritized action plan. Give practical order; suggest owners/effort only
@@ -128,7 +156,7 @@ The run has no effort or owner fields, so the report states these need scoping
 rather than creating unsupported estimates. All internal navigation targets and
 material finding fields are checked before export.
 
-Scores appear with their exact criterion scope in the methodology appendix.
+The methodology appendix explains the coarse status scale without numbers.
 HTML includes an expandable explanation of the individual criterion rationales;
 PDF readers are directed to HTML or the saved run for that extra explanation.
 All substantive findings, category reviews and unknowns remain in the PDF.

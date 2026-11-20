@@ -7,7 +7,7 @@
 /geo-audit https://example.com
 ```
 
-The `/geo-audit` skill orchestrates the audit using explicitly loaded bundled roles and writes validated `run.json`, HTML and PDF in a unique run directory. It can perform roles sequentially when delegation is unavailable. Read `docs/RUN-FORMAT.md`, `docs/AUDIT-DEPTH.md`, `docs/CLIENT-REPORT.md`, `docs/WORKFLOW.md` and `docs/ACTIONS.md` for toolkit 1.7.0 (versions live in `scripts/version.py`). New runs use schema 1.4.0; core scoring retains immutable rubric 1.2.0; detailed review is separate. Default client exports are labelled drafts; final reports require a current named review. `--technical` exports raw evidence separately.
+The `/geo-audit` skill orchestrates the audit using explicitly loaded bundled roles and writes validated `run.json`, HTML and PDF in a unique run directory. It can perform roles sequentially when delegation is unavailable. Read `docs/RUN-FORMAT.md`, `docs/AUDIT-DEPTH.md`, `docs/CLIENT-REPORT.md`, `docs/WORKFLOW.md` and `docs/ACTIONS.md` for toolkit 1.8.0 (versions live in `scripts/version.py`). New runs use schema 1.5.0; core scoring retains immutable rubric 1.2.0; detailed review is separate. Schema 1.5.0 adds evidence source types, finding excerpts, an entity register, owner questions, a visibility question set and an independent claim check (`scripts/claim_check.py`) that blocks export on unsupported sentences. Default client exports are labelled drafts; final reports require a current named review. `--technical` exports raw evidence separately.
 
 ## Development
 
@@ -23,7 +23,8 @@ Run `python -m unittest discover -s tests` and `ruff check scripts tests` before
 | `geo-technical` | `.claude/agents/geo-technical.md` | Technical GEO infrastructure |
 | `geo-content` | `.claude/agents/geo-content.md` | Content E-E-A-T quality |
 | `geo-schema` | `.claude/agents/geo-schema.md` | Schema & structured data |
-| `geo-platform-analysis` | `.claude/agents/geo-platform-analysis.md` | AI platform readiness |
+| `geo-platform-analysis` | `.claude/agents/geo-platform-analysis.md` | AI visibility question set and observations |
+| `geo-claim-check` | `.claude/agents/geo-claim-check.md` | Independent claim check before export |
 
 ## Collection
 

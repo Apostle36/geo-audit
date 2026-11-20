@@ -4,7 +4,7 @@ Read this with the orchestrator before a full audit. The ten immutable scored
 criteria are a small comparable core, **not the audit checklist**. Complete the
 detailed review for the five areas below, using the bundled role procedures.
 Topic IDs live in `scripts/review_topics.py`; record their observations in the
-run's `review` list (schema 1.4.0). A topic can be assessed, unknown or not applicable.
+run's `review` list (schema 1.5.0). A topic can be assessed, unknown or not applicable.
 Explain unknowns and exclusions; do not label a skipped check as healthy.
 
 ## Discovery and sampling
@@ -87,7 +87,7 @@ unsupported conclusions. Training permission is separate from search access.
 
 ## Detailed coverage versus scoring
 
-Use `schema_version: "1.4.0"` with `review` for new comprehensive audits. Keep
+Use `schema_version: "1.5.0"` with `review` for new comprehensive audits. Keep
 `assessment.rubric_version: "1.2.0"`; never edit or silently replace that rubric.
 An omitted detailed topic displays as not recorded. An unknown topic displays
 as needs checking. The report must not advertise a complete audit when important

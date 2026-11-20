@@ -7,6 +7,8 @@ from datetime import datetime
 from html.parser import HTMLParser
 from pathlib import Path
 
+from claims import SOURCE_TYPES
+
 
 def strict_json(text):
     """Reject non-standard constants and duplicate keys, retaining no ambiguity."""
@@ -56,11 +58,14 @@ def validate_registry(records):
     registry = {}
     required = {"id", "source", "collected_at", "method", "content", "status", "sha256"}
     for record in records:
-        if not isinstance(record, dict) or set(record) != required:
-            raise ValueError(f"Evidence requires exactly these fields: {sorted(required)}")
+        # source_type is optional here; run schema 1.5.0 makes it mandatory (run_contract.py).
+        if not isinstance(record, dict) or set(record) - {"source_type"} != required:
+            raise ValueError(f"Evidence requires exactly these fields: {sorted(required)} (plus optional source_type)")
         for key in required:
             if not isinstance(record[key], str):
                 raise ValueError(f"Evidence {key} must be text")
+        if "source_type" in record and record["source_type"] not in SOURCE_TYPES:
+            raise ValueError(f"Evidence source_type must be one of {', '.join(SOURCE_TYPES)}")
         for key in ("id", "source", "collected_at", "method", "status"):
             if not record[key].strip():
                 raise ValueError(f"Evidence {key} cannot be empty")
@@ -231,6 +236,8 @@ def main():
     parser.add_argument("--collected-at", help="Actual collection time with timezone, not report creation time")
     parser.add_argument("--method")
     parser.add_argument("--status", choices=["success", "failed", "unavailable"], default="success")
+    parser.add_argument("--source-type", choices=SOURCE_TYPES,
+                        help="Kind of source; run schema 1.5.0 requires it on every evidence record")
     args = parser.parse_args()
     if args.record_id and not (args.source and args.collected_at and args.method):
         parser.error("--record-id requires --source, --collected-at and --method")
@@ -241,6 +248,8 @@ def main():
             result = {"id": args.record_id, "source": args.source, "collected_at": args.collected_at,
                       "method": args.method, "status": args.status, "content": content,
                       "sha256": hashlib.sha256(body).hexdigest()}
+            if args.source_type:
+                result["source_type"] = args.source_type
             validate_registry([result])
         else:
             result = extract(body.decode("utf-8", errors="replace"))
